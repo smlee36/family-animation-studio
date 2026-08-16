@@ -46,6 +46,8 @@ export default async function EpisodeDetailPage({ params }: { params: Promise<{ 
   ]);
   const referenceById = new Map(references.map((reference) => [reference.id, reference]));
   const generationByShot = new Map(generationEntries.filter((entry): entry is readonly [string, ShotGenerationRecord] => Boolean(entry[1])));
+  const hasPhotoInput = storyboardInputs.some((input) => input.kind === "photo");
+  const hasStoryboardInput = storyboardInputs.some((input) => (input.kind || "storyboard") === "storyboard");
 
   return (
     <main className="page-shell episode-detail-page">
@@ -66,7 +68,7 @@ export default async function EpisodeDetailPage({ params }: { params: Promise<{ 
 
       {storyboardInputs.length ? (
         <section className="saved-storyboards" aria-labelledby="saved-storyboards-title">
-          <h2 id="saved-storyboards-title">입력 스토리보드</h2>
+          <h2 id="saved-storyboards-title">{hasPhotoInput && !hasStoryboardInput ? "영상 시작 사진" : hasPhotoInput ? "입력 이미지" : "입력 스토리보드"}</h2>
           <div className="saved-storyboard-grid">
             {storyboardInputs.map((input) => (
               <a href={`/api/story-inputs/${input.id}/image`} target="_blank" rel="noreferrer" key={input.id}>
@@ -94,7 +96,7 @@ export default async function EpisodeDetailPage({ params }: { params: Promise<{ 
                 {episode.sceneFrames?.[scene.id] ? (
                   <section className="saved-scene-frame" aria-label={`${scene.title} 기준 이미지`}>
                     <div>
-                      <strong>9:16 Scene 기준 이미지</strong>
+                      <strong>{episode.sceneFrames[scene.id].model === "uploaded-photo" ? "영상 시작 사진" : episode.format === "landscape" ? "16:9 Scene 기준 이미지" : "9:16 Scene 기준 이미지"}</strong>
                       <span>{episode.sceneFrames[scene.id].approvalStatus === "approved" ? "승인 완료" : "확인 필요"}</span>
                     </div>
                     <div className="scene-frame-image">
