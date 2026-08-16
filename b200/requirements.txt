@@ -1,0 +1,13 @@
+# Dependencies for the b200/ pipeline tooling ONLY.
+#
+# Deliberately does not list torch: the Blackwell-capable build comes from the
+# NGC container, and pinning it here risks pip replacing it with a generic PyPI
+# wheel that has no sm_100 kernels. See scripts/10_install_comfyui.sh.
+
+requests>=2.31
+PyYAML>=6.0
+websocket-client>=1.7     # optional: live progress. Falls back to /history polling.
+huggingface_hub[hf_transfer]>=0.24   # weight downloads
+
+# tests
+pytest>=8.0

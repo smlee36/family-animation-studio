@@ -1,0 +1,99 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "_meta": { "title": "B200::checkpoint" },
+    "inputs": { "unet_name": "wan/wan2.2_i2v_a14b.safetensors", "weight_dtype": "default" }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "_meta": { "title": "B200::text_encoder" },
+    "inputs": { "clip_name": "umt5_xxl.safetensors", "type": "wan" }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "_meta": { "title": "B200::vae" },
+    "inputs": { "vae_name": "wan/wan_2.1_vae.safetensors" }
+  },
+  "4": {
+    "class_type": "CLIPVisionLoader",
+    "_meta": { "title": "B200::clip_vision" },
+    "inputs": { "clip_name": "clip_vision_h.safetensors" }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "B200::prompt" },
+    "inputs": { "text": "", "clip": ["2", 0] }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "B200::negative" },
+    "inputs": { "text": "worst quality, blurry, jittery, distorted, warped face, extra limbs", "clip": ["2", 0] }
+  },
+  "7": {
+    "class_type": "LoadImage",
+    "_meta": { "title": "B200::image_start" },
+    "inputs": { "image": "placeholder.png", "upload": "image" }
+  },
+  "8": {
+    "class_type": "CLIPVisionEncode",
+    "_meta": { "title": "B200::clip_vision_encode" },
+    "inputs": { "clip_vision": ["4", 0], "image": ["7", 0], "crop": "center" }
+  },
+  "9": {
+    "class_type": "WanImageToVideo",
+    "_meta": { "title": "B200::i2v" },
+    "inputs": {
+      "positive": ["5", 0],
+      "negative": ["6", 0],
+      "vae": ["3", 0],
+      "clip_vision_output": ["8", 0],
+      "start_image": ["7", 0],
+      "width": 1280,
+      "height": 704,
+      "length": 81,
+      "batch_size": 1
+    }
+  },
+  "10": {
+    "class_type": "ModelSamplingSD3",
+    "_meta": { "title": "B200::model_sampling" },
+    "inputs": { "model": ["1", 0], "shift": 8.0 }
+  },
+  "11": {
+    "class_type": "KSampler",
+    "_meta": { "title": "B200::sampler" },
+    "inputs": {
+      "model": ["10", 0],
+      "seed": 0,
+      "steps": 30,
+      "cfg": 5.0,
+      "sampler_name": "uni_pc",
+      "scheduler": "simple",
+      "positive": ["9", 0],
+      "negative": ["9", 1],
+      "latent_image": ["9", 2],
+      "denoise": 1.0
+    }
+  },
+  "12": {
+    "class_type": "VAEDecode",
+    "_meta": { "title": "B200::decode" },
+    "inputs": { "samples": ["11", 0], "vae": ["3", 0] }
+  },
+  "13": {
+    "class_type": "VHS_VideoCombine",
+    "_meta": { "title": "B200::output" },
+    "inputs": {
+      "images": ["12", 0],
+      "frame_rate": 16,
+      "loop_count": 0,
+      "filename_prefix": "b200/clip",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 17,
+      "save_metadata": true,
+      "pingpong": false,
+      "save_output": true
+    }
+  }
+}

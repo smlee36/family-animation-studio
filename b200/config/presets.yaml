@@ -1,0 +1,158 @@
+# Scene-type presets for watercolour-illustration keyframes with people in them.
+#
+# STATUS: these are calibrated starting points derived from how the LTX sampler
+# parameters behave, NOT numbers measured on your keyframes. They could not be
+# measured while this file was written because the authoring environment had no
+# GPU. Run `scripts/50_sweep.sh` on the B200 with two or three real keyframes,
+# look at the contact sheet it produces, and write the winning values back here.
+# The sweep exists precisely so this file stops being a guess.
+#
+# What each knob does, for when you tune:
+#   steps       sampling steps. Below ~20 the watercolour texture turns mushy;
+#               above ~40 the return is mostly wasted time on a B200.
+#   cfg         prompt adherence. High cfg on an illustration style tends to
+#               push toward photoreal and break the linework. Keep it low.
+#   max_shift / base_shift
+#               LTX's timestep shift. This is the real "motion strength" dial:
+#               raising it lets the model move further from the conditioning
+#               frame; lowering it keeps the composition locked.
+#   terminal    where the sigma schedule ends. Lower = more refinement at the
+#               end = cleaner edges, slightly less motion.
+#   guide_strength_start / _end
+#               only in the first+last workflows. 1.0 pins the endpoint exactly.
+#               Drop the end guide to ~0.85 if the clip visibly snaps into the
+#               final frame in the last few frames.
+#   length      frame count. LTX wants (multiple of 8) + 1. 121 @ 24fps = 5.0s.
+#
+# `extends: base` merges over the base preset, so common values live in one place.
+
+version: 1
+
+base:
+  workflow: ltx_i2v_firstlast
+  width: 1280
+  # 704, not 720: LTX's latent grid needs both dimensions divisible by 32 and
+  # 720/32 = 22.5. 1280x704 is the usable "720p" for this model. The post
+  # workflow delivers a true 1920x1080 via upscale + resize.
+  height: 704
+  length: 121          # (15 * 8) + 1 -> 5.04s at 24fps
+  frame_rate: 24
+  steps: 30
+  cfg: 3.0
+  sampler_name: euler
+  max_shift: 2.05
+  base_shift: 0.95
+  terminal: 0.1
+  guide_strength_start: 1.0
+  guide_strength_end: 1.0
+  negative_prompt: >-
+    photorealistic, 3d render, cgi, plastic skin, harsh digital lines,
+    worst quality, low quality, blurry, jittery, flickering, warped face,
+    deformed hands, extra limbs, watermark, text, subtitles
+
+presets:
+
+  # ---------------------------------------------------------------- 잔잔한 동작
+  calm:
+    extends: base
+    label: "Calm — breathing, blinking, hair and cloth drift, static camera"
+    notes: >-
+      For a held shot where the character is essentially still. Motion is
+      deliberately suppressed so the watercolour wash does not boil between
+      frames; low shift plus a low terminal keeps texture stable. This is the
+      preset to reach for first when a clip comes out shimmering.
+    steps: 30
+    cfg: 2.8
+    max_shift: 1.30
+    base_shift: 0.75
+    terminal: 0.05
+    guide_strength_end: 1.0
+    prompt_suffix: >-
+      subtle natural motion, gentle breathing, slow blink, soft drifting hair
+      and fabric, static locked-off camera, consistent watercolour texture
+
+  # ------------------------------------------------------------------ 큰 동작
+  action:
+    extends: base
+    label: "Action — walking, turning, gesturing, clear body movement"
+    notes: >-
+      Raises the shift so the model is allowed to travel away from the start
+      frame, and eases the end guide so the last second does not snap. More
+      steps because larger motion needs them to stay clean. If limbs smear,
+      lower max_shift before raising steps.
+    steps: 36
+    cfg: 3.2
+    max_shift: 2.60
+    base_shift: 1.05
+    terminal: 0.10
+    guide_strength_end: 0.88
+    prompt_suffix: >-
+      clear full-body motion, natural weight and follow-through, coherent limbs
+      throughout, stable character design, hand-painted watercolour style
+
+  # ------------------------------------------------------------- 카메라 이동
+  camera:
+    extends: base
+    label: "Camera move — pan, push-in, parallax, subject relatively still"
+    notes: >-
+      The hard case for I2V: the model has to invent parallax and edge content
+      that the single keyframe never showed. Higher shift buys that freedom, and
+      cfg stays low so the model is not fighting the prompt while it does it.
+      Generate at 1280x704 and let the post workflow deliver 1080p — pushing the
+      native resolution up tends to cost coherence faster than it buys detail.
+    steps: 36
+    cfg: 2.6
+    max_shift: 2.40
+    base_shift: 1.00
+    terminal: 0.08
+    guide_strength_start: 0.95
+    guide_strength_end: 0.85
+    prompt_suffix: >-
+      smooth cinematic camera movement, steady parallax between foreground and
+      background, consistent lighting and palette, no warping at frame edges
+
+  # ------------------------------------------------------- iteration + delivery
+  draft:
+    extends: base
+    label: "Draft — fast, for checking composition and prompt before committing"
+    notes: "~1/3 the cost of calm. Use it for the first pass over a new scene folder."
+    width: 960
+    height: 544
+    length: 73          # (9 * 8) + 1 -> ~3.0s
+    steps: 18
+    cfg: 3.0
+
+  final_1080p:
+    extends: action
+    label: "Final delivery — first+last, 4x upscale to 1080p, 2x interpolation to 48fps"
+    notes: >-
+      Generation still happens at 720p; the post chain does the rest. Requires
+      the upscale model and the RIFE checkpoint to be present — `scripts/40_smoke_test.sh`
+      reports whether both resolved.
+    workflow: ltx_i2v_firstlast_post
+    out_width: 1920
+    out_height: 1080
+    interpolate_multiplier: 2
+    upscale_model: RealESRGAN_x4.pth
+    steps: 40
+
+  # ------------------------------------------------------------- Phase 4: Wan
+  wan_calm:
+    extends: base
+    label: "Wan 2.2 equivalent of `calm`, for side-by-side comparison"
+    workflow: wan_i2v
+    length: 81          # Wan's native clip length at 16fps -> ~5s
+    frame_rate: 16
+    steps: 30
+    cfg: 5.0            # Wan wants noticeably higher cfg than LTX
+    sampler_name: uni_pc
+    shift: 8.0
+    # Wan's graph has no LTX scheduler/guide nodes; these must not be sent.
+    drop: [max_shift, base_shift, terminal, guide_strength_start, guide_strength_end]
+
+  wan_action:
+    extends: wan_calm
+    label: "Wan 2.2 equivalent of `action`"
+    steps: 36
+    cfg: 5.5
+    shift: 5.0

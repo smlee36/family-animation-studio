@@ -1,0 +1,99 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": { "title": "B200::checkpoint" },
+    "inputs": { "ckpt_name": "ltx/ltxv.safetensors" }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "_meta": { "title": "B200::text_encoder" },
+    "inputs": { "clip_name": "t5xxl.safetensors", "type": "ltxv" }
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "B200::prompt" },
+    "inputs": { "text": "", "clip": ["2", 0] }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "B200::negative" },
+    "inputs": { "text": "worst quality, blurry, jittery, distorted, warped face, extra limbs", "clip": ["2", 0] }
+  },
+  "5": {
+    "class_type": "LoadImage",
+    "_meta": { "title": "B200::image_start" },
+    "inputs": { "image": "placeholder.png", "upload": "image" }
+  },
+  "6": {
+    "class_type": "LTXVImgToVideo",
+    "_meta": { "title": "B200::i2v" },
+    "inputs": {
+      "positive": ["3", 0],
+      "negative": ["4", 0],
+      "vae": ["1", 2],
+      "image": ["5", 0],
+      "width": 1280,
+      "height": 704,
+      "length": 121,
+      "batch_size": 1
+    }
+  },
+  "7": {
+    "class_type": "LTXVConditioning",
+    "_meta": { "title": "B200::conditioning" },
+    "inputs": { "positive": ["6", 0], "negative": ["6", 1], "frame_rate": 24 }
+  },
+  "8": {
+    "class_type": "LTXVScheduler",
+    "_meta": { "title": "B200::scheduler" },
+    "inputs": {
+      "steps": 30,
+      "max_shift": 2.05,
+      "base_shift": 0.95,
+      "stretch": true,
+      "terminal": 0.1,
+      "latent": ["6", 2]
+    }
+  },
+  "9": {
+    "class_type": "KSamplerSelect",
+    "_meta": { "title": "B200::sampler_select" },
+    "inputs": { "sampler_name": "euler" }
+  },
+  "10": {
+    "class_type": "SamplerCustom",
+    "_meta": { "title": "B200::sampler" },
+    "inputs": {
+      "model": ["1", 0],
+      "add_noise": true,
+      "noise_seed": 0,
+      "cfg": 3.0,
+      "positive": ["7", 0],
+      "negative": ["7", 1],
+      "sampler": ["9", 0],
+      "sigmas": ["8", 0],
+      "latent_image": ["6", 2]
+    }
+  },
+  "11": {
+    "class_type": "VAEDecode",
+    "_meta": { "title": "B200::decode" },
+    "inputs": { "samples": ["10", 0], "vae": ["1", 2] }
+  },
+  "12": {
+    "class_type": "VHS_VideoCombine",
+    "_meta": { "title": "B200::output" },
+    "inputs": {
+      "images": ["11", 0],
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "b200/clip",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 17,
+      "save_metadata": true,
+      "pingpong": false,
+      "save_output": true
+    }
+  }
+}
