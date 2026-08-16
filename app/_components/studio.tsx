@@ -7,6 +7,7 @@ import type { DirectorPlan, DirectorReference } from "@/lib/director/types";
 import type { ShotGenerationView } from "@/lib/generations/types";
 
 const DRAFT_KEY = "family-studio-story-draft";
+const QC_FRAME_COUNT = 5;
 
 type DirectorApiResponse = {
   plan?: DirectorPlan;
@@ -14,6 +15,72 @@ type DirectorApiResponse = {
   error?: string;
   requestId?: string;
 };
+
+type GenerationApiResponse = {
+  generation?: ShotGenerationView;
+  autoRegeneration?: ShotGenerationView | null;
+  autoRegenerationError?: string;
+  error?: string;
+  requestId?: string;
+};
+
+function apiError(body: GenerationApiResponse, fallback: string) {
+  return `${body.error || fallback}${body.requestId ? ` (문의 번호: ${body.requestId})` : ""}`;
+}
+
+function waitForMediaEvent(media: HTMLMediaElement, eventName: "loadedmetadata" | "seeked", timeoutMs = 15_000) {
+  return new Promise<void>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("영상 프레임 준비 시간이 초과되었습니다."));
+    }, timeoutMs);
+    const onEvent = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error("영상 프레임을 불러오지 못했습니다."));
+    };
+    const cleanup = () => {
+      window.clearTimeout(timeoutId);
+      media.removeEventListener(eventName, onEvent);
+      media.removeEventListener("error", onError);
+    };
+    media.addEventListener(eventName, onEvent, { once: true });
+    media.addEventListener("error", onError, { once: true });
+  });
+}
+
+async function captureVideoFrames(videoUrl: string) {
+  const video = document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = "auto";
+  video.src = videoUrl;
+  if (video.readyState < 1) await waitForMediaEvent(video, "loadedmetadata");
+  if (!Number.isFinite(video.duration) || video.duration <= 0) throw new Error("영상 길이를 확인하지 못했습니다.");
+
+  const scale = Math.min(1, 640 / Math.max(1, video.videoWidth));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("영상 검수 화면을 준비하지 못했습니다.");
+
+  const frames: string[] = [];
+  for (let index = 0; index < QC_FRAME_COUNT; index += 1) {
+    const ratio = index / (QC_FRAME_COUNT - 1);
+    const targetTime = Math.min(Math.max(0.01, video.duration * ratio), Math.max(0.01, video.duration - 0.05));
+    video.currentTime = targetTime;
+    await waitForMediaEvent(video, "seeked");
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    frames.push(canvas.toDataURL("image/jpeg", 0.72));
+  }
+  video.removeAttribute("src");
+  video.load();
+  return frames;
+}
 
 function formatDuration(totalSeconds: number) {
   const minutes = Math.floor(totalSeconds / 60);
@@ -30,6 +97,8 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [generations, setGenerations] = useState<Record<string, ShotGenerationView>>({});
+  const [qcPendingShots, setQcPendingShots] = useState<Set<string>>(new Set());
+  const [qcMessages, setQcMessages] = useState<Record<string, string>>({});
   const [openScenes, setOpenScenes] = useState<Set<string>>(new Set());
   const referenceById = useMemo(() => new Map(references.map((reference) => [reference.id, reference])), [references]);
 
@@ -76,6 +145,70 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
     }));
   }
 
+  async function pollGeneration(shotId: string, initialGeneration: ShotGenerationView) {
+    let generation = initialGeneration;
+    for (let attempt = 0; attempt < 40 && generation.status === "generating"; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 10_000));
+      const pollResponse = await fetch(`/api/shots/generate/${generation.id}`, { cache: "no-store" });
+      const pollBody = (await pollResponse.json()) as GenerationApiResponse;
+      if (!pollResponse.ok || !pollBody.generation) {
+        throw new Error(apiError(pollBody, "영상 생성 상태를 확인하지 못했습니다."));
+      }
+      generation = pollBody.generation;
+      setGenerations((current) => ({ ...current, [shotId]: generation }));
+    }
+    if (generation.status === "generating") throw new Error("영상 생성이 오래 걸리고 있습니다. 잠시 후 다시 시도해 주세요.");
+    return generation;
+  }
+
+  async function runQcCycle(shot: DirectorPlan["scenes"][number]["shots"][number], initialGeneration: ShotGenerationView) {
+    let generation = initialGeneration;
+    setQcPendingShots((current) => new Set(current).add(shot.id));
+    setQcMessages((current) => ({ ...current, [shot.id]: "" }));
+    try {
+      while (generation.status === "ready") {
+        const frames = await captureVideoFrames(generation.videoUrl);
+        const response = await fetch(`/api/shots/generate/${generation.id}/qc`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            frames,
+            shot: {
+              title: shot.title,
+              action: shot.action,
+              prompt: shot.prompt,
+              startState: shot.startState,
+              endState: shot.endState,
+            },
+          }),
+        });
+        const body = (await response.json()) as GenerationApiResponse;
+        if (!response.ok || !body.generation) throw new Error(apiError(body, "GPT 영상 검수를 완료하지 못했습니다."));
+        generation = body.generation;
+        setGenerations((current) => ({ ...current, [shot.id]: generation }));
+        if (body.autoRegenerationError) {
+          setQcMessages((current) => ({ ...current, [shot.id]: body.autoRegenerationError || "" }));
+        }
+        if (!body.autoRegeneration) break;
+        generation = body.autoRegeneration;
+        setGenerations((current) => ({ ...current, [shot.id]: generation }));
+        generation = await pollGeneration(shot.id, generation);
+        if (generation.status !== "ready") break;
+      }
+    } catch (caught) {
+      setQcMessages((current) => ({
+        ...current,
+        [shot.id]: caught instanceof Error ? caught.message : "GPT 영상 검수 중 문제가 생겼습니다.",
+      }));
+    } finally {
+      setQcPendingShots((current) => {
+        const next = new Set(current);
+        next.delete(shot.id);
+        return next;
+      });
+    }
+  }
+
   async function generateShot(shot: DirectorPlan["scenes"][number]["shots"][number]) {
     setGenerations((current) => ({
       ...current,
@@ -90,8 +223,14 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
         createdAt: "",
         updatedAt: "",
         videoUrl: "",
+        qualityTier: "fast",
+        autoRegenerationCount: 0,
+        parentGenerationId: "",
+        approvalStatus: "pending",
+        qc: null,
       },
     }));
+    setQcMessages((current) => ({ ...current, [shot.id]: "" }));
 
     try {
       const startResponse = await fetch("/api/shots/generate", {
@@ -104,24 +243,15 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
           referenceIds: shot.referenceIds,
         }),
       });
-      const startBody = (await startResponse.json()) as { generation?: ShotGenerationView; error?: string; requestId?: string };
+      const startBody = (await startResponse.json()) as GenerationApiResponse;
       if (!startResponse.ok || !startBody.generation) {
-        throw new Error(`${startBody.error || "영상 생성을 시작하지 못했습니다."}${startBody.requestId ? ` (문의 번호: ${startBody.requestId})` : ""}`);
+        throw new Error(apiError(startBody, "영상 생성을 시작하지 못했습니다."));
       }
 
       let generation = startBody.generation;
       setGenerations((current) => ({ ...current, [shot.id]: generation }));
-      for (let attempt = 0; attempt < 40 && generation.status === "generating"; attempt += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 10_000));
-        const pollResponse = await fetch(`/api/shots/generate/${generation.id}`, { cache: "no-store" });
-        const pollBody = (await pollResponse.json()) as { generation?: ShotGenerationView; error?: string; requestId?: string };
-        if (!pollResponse.ok || !pollBody.generation) {
-          throw new Error(`${pollBody.error || "영상 생성 상태를 확인하지 못했습니다."}${pollBody.requestId ? ` (문의 번호: ${pollBody.requestId})` : ""}`);
-        }
-        generation = pollBody.generation;
-        setGenerations((current) => ({ ...current, [shot.id]: generation }));
-      }
-      if (generation.status === "generating") throw new Error("영상 생성이 오래 걸리고 있습니다. 잠시 후 다시 시도해 주세요.");
+      generation = await pollGeneration(shot.id, generation);
+      if (generation.status === "ready") await runQcCycle(shot, generation);
     } catch (caught) {
       setGenerations((current) => ({
         ...current,
@@ -137,7 +267,30 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
           createdAt: current[shot.id]?.createdAt || "",
           updatedAt: new Date().toISOString(),
           videoUrl: "",
+          qualityTier: current[shot.id]?.qualityTier || "fast",
+          autoRegenerationCount: current[shot.id]?.autoRegenerationCount || 0,
+          parentGenerationId: current[shot.id]?.parentGenerationId || "",
+          approvalStatus: current[shot.id]?.approvalStatus || "pending",
+          qc: current[shot.id]?.qc || null,
         },
+      }));
+    }
+  }
+
+  async function approveShot(shotId: string, generation: ShotGenerationView) {
+    try {
+      const response = await fetch(`/api/shots/generate/${generation.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approved: true }),
+      });
+      const body = (await response.json()) as GenerationApiResponse;
+      if (!response.ok || !body.generation) throw new Error(apiError(body, "Shot을 승인하지 못했습니다."));
+      setGenerations((current) => ({ ...current, [shotId]: body.generation as ShotGenerationView }));
+    } catch (caught) {
+      setQcMessages((current) => ({
+        ...current,
+        [shotId]: caught instanceof Error ? caught.message : "Shot을 승인하지 못했습니다.",
       }));
     }
   }
@@ -243,7 +396,10 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
                               <span className="shot-number">SHOT {shot.id}</span>
                               <h3>{shot.title}</h3>
                             </div>
-                            <span className="shot-duration">{shot.estimatedSeconds}초</span>
+                            <div className="shot-badges">
+                              {generation ? <span className={`model-tier ${generation.qualityTier}`}>{generation.qualityTier === "fast" ? "FAST" : "STANDARD"}</span> : null}
+                              <span className="shot-duration">{shot.estimatedSeconds}초</span>
+                            </div>
                           </div>
                           <p className="shot-action">{shot.action}</p>
                           <div className="continuity-row">
@@ -269,9 +425,41 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
                           {generation?.status === "ready" ? (
                             <div className="shot-video-result">
                               <video controls playsInline preload="metadata" src={generation.videoUrl} />
+                              {qcPendingShots.has(shot.id) ? (
+                                <p className="qc-progress" role="status"><span className="button-spinner" aria-hidden="true" />GPT가 영상 품질을 검수하고 있어요…</p>
+                              ) : null}
+                              {generation.qc ? (
+                                <section className="qc-result" aria-label={`Shot ${shot.id} 품질 검수`}>
+                                  <div className="qc-heading">
+                                    <div><span>GPT QC</span><strong>{generation.qc.overall}</strong><small>/ 100</small></div>
+                                    <span className={`qc-decision ${generation.approvalStatus}`}>
+                                      {generation.approvalStatus === "approved" ? "승인" : "사용자 확인 필요"}
+                                    </span>
+                                  </div>
+                                  <div className="qc-score-grid">
+                                    <span>캐릭터 <b>{generation.qc.scores.characterConsistency}</b></span>
+                                    <span>얼굴 <b>{generation.qc.scores.faceStability}</b></span>
+                                    <span>손·신체 <b>{generation.qc.scores.handsBody}</b></span>
+                                    <span>배경 <b>{generation.qc.scores.backgroundConsistency}</b></span>
+                                    <span>소품 <b>{generation.qc.scores.objectConsistency}</b></span>
+                                    <span>움직임 <b>{generation.qc.scores.motionNaturalness}</b></span>
+                                    <span>Reference <b>{generation.qc.scores.referenceMatch}</b></span>
+                                    <span>연결성 <b>{generation.qc.scores.continuity}</b></span>
+                                  </div>
+                                  <p>{generation.qc.summary}</p>
+                                  {generation.autoRegenerationCount ? <p className="qc-attempt">Standard 자동 보정 {generation.autoRegenerationCount}/2회</p> : null}
+                                </section>
+                              ) : null}
+                              {qcMessages[shot.id] ? <p className="feedback compact-feedback" role="alert">{qcMessages[shot.id]}</p> : null}
                               <div className="video-actions">
                                 <a className="small-action nav-link" href={`${generation.videoUrl}?download=1`}>파일 저장</a>
-                                <button className="small-action" type="button" onClick={() => generateShot(shot)}>다시 생성</button>
+                                {generation.approvalStatus !== "approved" ? (
+                                  <button className="small-action" type="button" onClick={() => approveShot(shot.id, generation)}>이대로 승인</button>
+                                ) : null}
+                                <button className="small-action" type="button" onClick={() => generateShot(shot)}>Fast로 다시 생성</button>
+                                {!generation.qc && !qcPendingShots.has(shot.id) ? (
+                                  <button className="small-action" type="button" onClick={() => runQcCycle(shot, generation)}>검수 다시 시도</button>
+                                ) : null}
                               </div>
                             </div>
                           ) : (
@@ -281,9 +469,10 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
                               disabled={generation?.status === "generating" || !shot.prompt.trim()}
                               onClick={() => generateShot(shot)}
                             >
-                              {generation?.status === "generating" ? <><span className="button-spinner" aria-hidden="true" />영상 생성 중…</> : generation?.status === "failed" ? "다시 생성" : "영상 만들기"}
+                              {generation?.status === "generating" ? <><span className="button-spinner" aria-hidden="true" />{generation.qualityTier === "standard" ? "Standard 보정 생성 중…" : "Fast 영상 생성 중…"}</> : generation?.status === "failed" ? "다시 생성" : "영상 만들기"}
                             </button>
                           )}
+                          {qcPendingShots.has(shot.id) && generation?.status === "generating" ? <p className="generation-note">QC 결과에 따라 Standard 보정 영상을 만들고 있어요.</p> : null}
                           {generation?.omittedReferenceIds.length ? (
                             <p className="generation-note">현재 Veo 사람 이미지 정책에 따라 일부 Reference를 제외하고 생성합니다.</p>
                           ) : null}

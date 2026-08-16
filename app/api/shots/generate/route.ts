@@ -22,8 +22,8 @@ export async function POST(request: NextRequest) {
       return jsonError("Shot 프롬프트 또는 Reference 정보를 확인해 주세요.", 400, requestId);
     }
 
-    const record = await startVeoGeneration({ id: randomUUID(), shotId, prompt, estimatedSeconds, referenceIds });
-    console.info(`[veo.start] requestId=${requestId} generationId=${record.id} operation=${record.operationName} model=${record.model} references=${record.usedReferenceIds.length}`);
+    const record = await startVeoGeneration({ id: randomUUID(), shotId, prompt, estimatedSeconds, referenceIds, qualityTier: "fast" });
+    console.info(`[veo.start] requestId=${requestId} generationId=${record.id} operation=${record.operationName} model=${record.model} tier=${record.qualityTier} references=${record.usedReferenceIds.length}`);
     return NextResponse.json({ generation: generationView(record), requestId }, { status: 202 });
   } catch (error) {
     logServerError("veo.start", error, requestId);

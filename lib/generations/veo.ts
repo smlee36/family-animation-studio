@@ -2,7 +2,7 @@ import "server-only";
 
 import { get, put } from "@vercel/blob";
 import { GoogleGenAI, VideoGenerationReferenceType, type VideoGenerationReferenceImage } from "@google/genai";
-import type { ShotGenerationRecord } from "@/lib/generations/types";
+import type { ShotGenerationRecord, VeoQualityTier } from "@/lib/generations/types";
 import { generationVideoPath, saveGeneration } from "@/lib/generations/storage";
 import { getReference } from "@/lib/references/storage";
 
@@ -55,11 +55,17 @@ export async function startVeoGeneration(input: {
   prompt: string;
   estimatedSeconds: number;
   referenceIds: string[];
+  qualityTier?: VeoQualityTier;
+  autoRegenerationCount?: number;
+  parentGenerationId?: string;
 }) {
   const containsMinor = MINOR_PATTERN.test(input.prompt);
   const references = await loadReferences(input.referenceIds, !containsMinor);
   const durationSeconds = references.images.length ? 8 : nearestDuration(input.estimatedSeconds);
-  const model = process.env.GEMINI_VEO_MODEL?.trim() || "veo-3.1-generate-preview";
+  const qualityTier = input.qualityTier || "fast";
+  const model = qualityTier === "fast"
+    ? process.env.GEMINI_VEO_FAST_MODEL?.trim() || "veo-3.1-fast-generate-preview"
+    : process.env.GEMINI_VEO_STANDARD_MODEL?.trim() || process.env.GEMINI_VEO_MODEL?.trim() || "veo-3.1-generate-preview";
   const ai = new GoogleGenAI({ apiKey: apiKey() });
   const operation = await ai.models.generateVideos({
     model,
@@ -91,6 +97,11 @@ export async function startVeoGeneration(input: {
     error: "",
     createdAt: now,
     updatedAt: now,
+    qualityTier,
+    autoRegenerationCount: Math.min(2, Math.max(0, input.autoRegenerationCount || 0)),
+    parentGenerationId: input.parentGenerationId || "",
+    approvalStatus: "pending",
+    qc: null,
   };
   await saveGeneration(record);
   return record;
