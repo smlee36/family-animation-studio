@@ -38,7 +38,7 @@ export const DIRECTOR_PLAN_SCHEMA = {
               properties: {
                 title: { type: "string", minLength: 1, maxLength: 80 },
                 action: { type: "string", minLength: 1, maxLength: 240 },
-                estimatedSeconds: { type: "integer", minimum: 4, maximum: 8 },
+                estimatedSeconds: { type: "integer", enum: [5, 10] },
                 referenceIds: {
                   type: "array",
                   maxItems: 6,

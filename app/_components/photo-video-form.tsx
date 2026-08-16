@@ -6,7 +6,7 @@ import { uploadPresigned } from "@vercel/blob/client";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import type { EpisodeFormat } from "@/lib/episodes/types";
 import type { ShotGenerationView } from "@/lib/generations/types";
-import type { LtxRenderMode } from "@/lib/generations/types";
+import type { LtxDurationSeconds, LtxRenderMode } from "@/lib/generations/types";
 import type { StoryInputView } from "@/lib/story-inputs/types";
 
 const MAX_PHOTO_BYTES = 20 * 1024 * 1024;
@@ -35,7 +35,7 @@ export function PhotoVideoForm() {
   const [photos, setPhotos] = useState<SelectedPhoto[]>([]);
   const [instruction, setInstruction] = useState("");
   const [format, setFormat] = useState<EpisodeFormat>("reels");
-  const [durationSeconds, setDurationSeconds] = useState<4 | 6 | 8>(4);
+  const [durationSeconds, setDurationSeconds] = useState<LtxDurationSeconds>(5);
   const [renderMode, setRenderMode] = useState<LtxRenderMode>("preview");
   const [highSpeedBatch, setHighSpeedBatch] = useState(true);
   const [pending, setPending] = useState(false);
@@ -194,7 +194,7 @@ export function PhotoVideoForm() {
 
       <fieldset className="photo-duration-selector" disabled={pending}>
         <legend>영상 길이</legend>
-        {([4, 6, 8] as const).map((seconds) => (
+        {([5, 10] as const).map((seconds) => (
           <label className={durationSeconds === seconds ? "selected" : ""} key={seconds}>
             <input type="radio" name="photo-duration" checked={durationSeconds === seconds} onChange={() => setDurationSeconds(seconds)} />
             <span>{seconds}초</span>

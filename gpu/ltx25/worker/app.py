@@ -231,8 +231,10 @@ def parse_timestamp(value: str) -> float:
 
 def expected_runtime_seconds(job: dict) -> int:
     if job.get("render_mode") == "preview":
-        return 150 if job.get("preset") == "gentle" else 180
-    base = {4: 360, 6: 450, 8: 570}.get(int(job.get("duration_seconds", 6)), 450)
+        if int(job.get("duration_seconds", 5)) >= 10:
+            return 240 if job.get("preset") == "gentle" else 300
+        return 120 if job.get("preset") == "gentle" else 150
+    base = {4: 360, 5: 360, 6: 450, 8: 570, 10: 720}.get(int(job.get("duration_seconds", 5)), 360)
     if job.get("preset") in {"action", "camera"}:
         base = round(base * 1.2)
     return base
@@ -410,6 +412,8 @@ def set_batch_mode(payload: dict = Body(...)) -> dict:
         with batch_lock:
             state = load_batch_state()
             if state["enabled"] and state["state"] == "ready":
+                state["last_job_at"] = now_iso()
+                save_batch_state(state)
                 return batch_status()
             timestamp = now_iso()
             state.update(enabled=True, state="starting", message="A.X를 멈추고 LTX 전용 GPU를 준비하고 있어요.", enabled_at=timestamp, last_job_at=timestamp, error="")
@@ -440,7 +444,7 @@ async def create_job(
     prompt: str = Form(...),
     preset: Literal["gentle", "action", "camera"] = Form("gentle"),
     aspect_ratio: Literal["16:9", "9:16"] = Form("9:16"),
-    duration_seconds: int = Form(6),
+    duration_seconds: int = Form(5),
     render_mode: Literal["preview", "final"] = Form("preview"),
     seed: int = Form(42),
     image: UploadFile = File(...),
@@ -451,7 +455,7 @@ async def create_job(
         raise HTTPException(status_code=400, detail="Invalid prompt")
     if not 0 <= seed <= 2_147_483_647:
         raise HTTPException(status_code=400, detail="Invalid seed")
-    if duration_seconds not in {4, 6, 8}:
+    if duration_seconds not in {5, 10}:
         raise HTTPException(status_code=400, detail="Invalid duration")
     existing = metadata_path(job_id)
     if existing.is_file():

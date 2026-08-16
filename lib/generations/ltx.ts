@@ -11,6 +11,7 @@ import {
 import { getReference } from "@/lib/references/storage";
 import type {
   LtxPreset,
+  LtxDurationSeconds,
   LtxRenderMode,
   ShotGenerationRecord,
   VideoAspectRatio,
@@ -45,10 +46,8 @@ function apiConfig() {
   return { baseUrl, apiKey };
 }
 
-function duration(value: number): 4 | 6 | 8 {
-  if (value <= 5) return 4;
-  if (value <= 7) return 6;
-  return 8;
+function duration(value: number): LtxDurationSeconds {
+  return value < 8 ? 5 : 10;
 }
 
 function authenticatedHeaders(apiKey: string) {

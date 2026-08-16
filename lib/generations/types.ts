@@ -3,6 +3,8 @@ export type VeoQualityTier = "fast" | "standard";
 export type VideoGenerationProvider = "google" | "ltx";
 export type LtxPreset = "gentle" | "action" | "camera";
 export type LtxRenderMode = "preview" | "final";
+export type LtxDurationSeconds = 5 | 10;
+export type VideoDurationSeconds = 4 | 5 | 6 | 8 | 10;
 export type ShotApprovalStatus = "pending" | "approved" | "needs_review";
 export type InitialFrameKind = "continuity" | "scene_master";
 export type VideoAspectRatio = "16:9" | "9:16";
@@ -50,7 +52,7 @@ export type ShotGenerationRecord = {
   initialFrameKind?: InitialFrameKind;
   initialFrameModel?: string;
   status: ShotGenerationStatus;
-  durationSeconds: 4 | 6 | 8;
+  durationSeconds: VideoDurationSeconds;
   aspectRatio?: VideoAspectRatio;
   usedReferenceIds: string[];
   omittedReferenceIds: string[];
@@ -141,7 +143,7 @@ export function isShotGenerationRecord(value: unknown): value is ShotGenerationR
     (record.initialFrameKind === undefined || record.initialFrameKind === "continuity" || record.initialFrameKind === "scene_master") &&
     (record.initialFrameModel === undefined || typeof record.initialFrameModel === "string") &&
     (record.status === "generating" || record.status === "ready" || record.status === "failed") &&
-    (record.durationSeconds === 4 || record.durationSeconds === 6 || record.durationSeconds === 8) &&
+    (record.durationSeconds === 4 || record.durationSeconds === 5 || record.durationSeconds === 6 || record.durationSeconds === 8 || record.durationSeconds === 10) &&
     (record.aspectRatio === undefined || record.aspectRatio === "16:9" || record.aspectRatio === "9:16") &&
     Array.isArray(record.usedReferenceIds) && Array.isArray(record.omittedReferenceIds) &&
     typeof record.videoPathname === "string" && typeof record.error === "string" &&

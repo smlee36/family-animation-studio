@@ -234,8 +234,10 @@ function ltxRemainingSeconds(generation: ShotGenerationView, nowMs: number) {
   if (stage === 2) return 15;
   const presetMultiplier = generation.ltxPreset === "gentle" ? 1 : 1.2;
   const baseSeconds = generation.ltxRenderMode === "preview"
-    ? (generation.ltxPreset === "gentle" ? 150 : 180)
-    : ({ 4: 360, 6: 450, 8: 570 } as const)[generation.durationSeconds] * presetMultiplier;
+    ? generation.durationSeconds >= 10
+      ? (generation.ltxPreset === "gentle" ? 240 : 300)
+      : (generation.ltxPreset === "gentle" ? 120 : 150)
+    : ({ 4: 360, 5: 360, 6: 450, 8: 570, 10: 720 } as const)[generation.durationSeconds] * presetMultiplier;
   if (stage === 0) return baseSeconds * (generation.backendQueuePosition + 1);
   const startedAt = Date.parse(generation.backendStartedAt);
   const elapsed = nowMs && Number.isFinite(startedAt) ? Math.max(0, (nowMs - startedAt) / 1000) : 0;
@@ -270,6 +272,10 @@ function ltxPresetForShot(shot: DirectorPlan["scenes"][number]["shots"][number])
   if (/camera|dolly|pan|zoom|tracking|카메라|줌|패닝|이동 촬영/i.test(text)) return "camera";
   if (/run|walk|jump|carry|hand over|stand up|sit down|달리|걷|뛰|점프|이동|건네|일어나|앉아/i.test(text)) return "action";
   return "gentle";
+}
+
+function newLtxDuration(seconds: number): 5 | 10 {
+  return seconds < 8 ? 5 : 10;
 }
 
 export function Studio({
@@ -765,7 +771,7 @@ export function Studio({
         continuitySourceGenerationId,
         initialFrameKind: "",
         status: "generating",
-        durationSeconds: 6,
+        durationSeconds: 5,
         aspectRatio: format === "reels" ? "9:16" : "16:9",
         usedReferenceIds: [],
         omittedReferenceIds: [],
@@ -791,7 +797,7 @@ export function Studio({
           sceneId: shotScene.id,
           shotId: shot.id,
           prompt: shot.prompt,
-          estimatedSeconds: shot.estimatedSeconds,
+          estimatedSeconds: newLtxDuration(shot.estimatedSeconds),
           referenceIds: shot.referenceIds,
           provider: videoProvider,
           ltxPreset: ltxPresetForShot(shot),
@@ -832,7 +838,7 @@ export function Studio({
           continuitySourceGenerationId: current[shot.id]?.continuitySourceGenerationId || continuitySourceGenerationId,
           initialFrameKind: current[shot.id]?.initialFrameKind || "",
           status: "failed",
-          durationSeconds: current[shot.id]?.durationSeconds || 6,
+          durationSeconds: current[shot.id]?.durationSeconds || 5,
           aspectRatio: current[shot.id]?.aspectRatio || (format === "reels" ? "9:16" : "16:9"),
           usedReferenceIds: current[shot.id]?.usedReferenceIds || [],
           omittedReferenceIds: current[shot.id]?.omittedReferenceIds || [],
@@ -1071,7 +1077,7 @@ export function Studio({
           <div className="plan-metrics" aria-label="이야기 구성 요약">
             <div><strong>{plan.scenes.length}</strong><span>Scenes</span></div>
             <div><strong>{plan.totalShots}</strong><span>Video Shots</span></div>
-            <div><strong>{formatDuration(plan.totalEstimatedSeconds)}</strong><span>예상 완성 길이</span></div>
+            <div><strong>{formatDuration(plan.scenes.reduce((total, scene) => total + scene.shots.reduce((sceneTotal, shot) => sceneTotal + newLtxDuration(shot.estimatedSeconds), 0), 0))}</strong><span>예상 완성 길이</span></div>
           </div>
 
           <fieldset className="video-provider-selector">
@@ -1221,7 +1227,7 @@ export function Studio({
                               {generation ? <span className={`model-tier ${generation.provider === "ltx" ? "ltx" : generation.model.includes("omni") ? "omni" : generation.qualityTier}`}>{generation.provider === "ltx" ? `LTX · ${generation.ltxRenderMode === "preview" ? "미리보기" : "고화질"}` : generation.model.includes("omni") ? "OMNI" : generation.qualityTier === "fast" ? "FAST" : "STANDARD"}</span> : null}
                               {generation?.continuitySourceGenerationId ? <span className={`continuity-badge${continuityIsStale ? " stale" : ""}`}>{continuityIsStale ? "연결 다시 필요" : "이전 프레임 연결"}</span> : null}
                               {generation?.initialFrameKind === "scene_master" ? <span className="continuity-badge">2D Scene 기준 프레임</span> : null}
-                              <span className="shot-duration">{shot.estimatedSeconds}초</span>
+                              <span className="shot-duration">{newLtxDuration(shot.estimatedSeconds)}초</span>
                             </div>
                           </div>
                           <p className="shot-action">{shot.action}</p>

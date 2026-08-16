@@ -25,6 +25,7 @@ Rules:
 - Always split sequences such as "wake up, pick up a toy, take a parent's hand, and walk" into separate Shots. Never hide extra actions in clauses joined by and/then/while.
 - Treat hand contact, picking up, putting down, handing over, opening, and drinking as their own Shot when they change the visible state. A walking Shot starts with any toy already held and any needed hand contact already established.
 - Keep the story complete without padding or repetitive filler. Use as many Scenes and Shots as the narrative complexity genuinely needs.
+- estimatedSeconds must be exactly 5 or 10. Use 5 seconds for one simple action and 10 seconds only when a larger continuous action genuinely needs more time.
 - Write titles, summaries, actions, states, and reference reasons in natural Korean.
 - Write each video prompt in concise production-ready English. Lead with positive visual instructions.
 - This is a Korean family. Every video prompt containing a person must explicitly identify them as Korean: Korean father, Korean mother, and the exact 34-month-old Korean toddler boy as applicable. Never substitute a generic, Western, or unrelated family appearance.
@@ -107,7 +108,7 @@ export async function createDirectorPlan(story: string, storyboardInputIds: stri
   const content: Responses.ResponseInputContent[] = [
     {
       type: "input_text",
-      text: `OUTPUT FORMAT: ${format === "reels" ? "Instagram Reel, vertical 9:16, target 40-55 seconds. Keep the complete story but favor 15-18 concise visual Shots and mobile-friendly compositions with the subject centered away from top and bottom UI zones." : "Landscape family video, 16:9."}\n\nUSER STORY:\n${story || "(No text. Build the story from the Episode storyboard images.)"}\n\nMASTER REFERENCE LIBRARY:\n${JSON.stringify(referenceCatalog)}`,
+      text: `OUTPUT FORMAT: ${format === "reels" ? "Instagram Reel, vertical 9:16, usually 75-100 seconds. Keep the complete story but favor 15-18 concise visual Shots and mobile-friendly compositions with the subject centered away from top and bottom UI zones." : "Landscape family video, 16:9."}\n\nUSER STORY:\n${story || "(No text. Build the story from the Episode storyboard images.)"}\n\nMASTER REFERENCE LIBRARY:\n${JSON.stringify(referenceCatalog)}`,
     },
     ...(await episodeStoryboardInput(storyboardInputIds)),
     ...(await masterReferenceImageInput(references)),

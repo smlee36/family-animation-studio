@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
     const provider: VideoGenerationProvider = body.provider === "google" ? "google" : "ltx";
     const ltxPreset: LtxPreset = body.ltxPreset === "action" || body.ltxPreset === "camera" ? body.ltxPreset : "gentle";
     const ltxRenderMode: LtxRenderMode = body.ltxRenderMode === "final" ? "final" : "preview";
-    const estimatedSeconds = typeof body.estimatedSeconds === "number" ? body.estimatedSeconds : 6;
+    const estimatedSeconds = typeof body.estimatedSeconds === "number" ? body.estimatedSeconds : 5;
     const referenceIds = Array.isArray(body.referenceIds) ? body.referenceIds.filter((id): id is string => typeof id === "string") : [];
     const continuitySourceGenerationId = typeof body.continuitySourceGenerationId === "string" ? body.continuitySourceGenerationId.trim() : "";
     const sceneMasterGenerationId = typeof body.sceneMasterGenerationId === "string" ? body.sceneMasterGenerationId.trim() : "";

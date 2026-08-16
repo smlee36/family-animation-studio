@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
     ])];
     const instruction = typeof body.instruction === "string" ? body.instruction.trim() : "";
     const format: EpisodeFormat = body.format === "landscape" ? "landscape" : "reels";
-    const durationSeconds = body.durationSeconds === 6 || body.durationSeconds === 8 ? body.durationSeconds : 4;
+    const durationSeconds = body.durationSeconds === 10 ? 10 : 5;
     const renderMode: LtxRenderMode = body.renderMode === "final" ? "final" : "preview";
     const highSpeedBatch = body.highSpeedBatch !== false;
     if (!inputIds.length || inputIds.length > 10 || inputIds.some((id) => !/^[0-9a-f-]{36}$/i.test(id)) || instruction.length > 1_000) {
