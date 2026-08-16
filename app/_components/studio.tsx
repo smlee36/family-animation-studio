@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { uploadPresigned } from "@vercel/blob/client";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { PhotoVideoForm } from "@/app/_components/photo-video-form";
 import type { DirectorPlan, DirectorReference } from "@/lib/director/types";
 import type { EpisodeFormat, EpisodeStudioState, SceneFrameRecord } from "@/lib/episodes/types";
 import type { LtxPreset, ShotGenerationView, VideoGenerationProvider } from "@/lib/generations/types";
@@ -341,7 +342,7 @@ export function Studio({
     const response = await fetch("/api/story-inputs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, name: file.name || "스토리보드", imagePathname: blob.pathname, contentType: file.type, size: file.size }),
+      body: JSON.stringify({ id, kind: "storyboard", name: file.name || "스토리보드", imagePathname: blob.pathname, contentType: file.type, size: file.size }),
     });
     const body = (await response.json()) as { input?: StoryInputView; error?: string; requestId?: string };
     if (!response.ok || !body.input) throw new Error(`${body.error || "이미지를 저장하지 못했습니다."}${body.requestId ? ` (문의 번호: ${body.requestId})` : ""}`);
@@ -850,7 +851,7 @@ export function Studio({
 
       <section className="studio-intro">
         <h1 className="studio-title">오늘 이야기를<br />들려주세요</h1>
-        <p className="studio-copy">하루 동안 있었던 일을 편하게 적어주세요. 장면과 영상 구성은 스튜디오가 알아서 준비합니다.</p>
+        <p className="studio-copy">하루 이야기를 적거나 사진 한 장을 올려주세요. 장면과 영상 구성은 스튜디오가 알아서 준비합니다.</p>
       </section>
 
       <form className="story-card" onSubmit={handleSubmit} aria-busy={pending}>
@@ -917,6 +918,9 @@ export function Studio({
         {pending ? <p className="phase-note" role="status">AI Director가 상황별 Scene과 한 가지 행동 중심의 Shot을 구성하고 있어요.</p> : null}
         {error ? <p className="feedback" role="alert">{error}</p> : null}
       </form>
+
+      <div className="creation-divider" aria-hidden="true"><span>또는</span></div>
+      <PhotoVideoForm />
 
       {plan ? (
         <section className="episode-plan" aria-labelledby="episode-plan-title">

@@ -40,7 +40,7 @@ export default async function StudioPage({ searchParams }: { searchParams: Promi
         references: allReferences.map(({ id, name, category, description }) => ({ id, name, category, description })),
         generations: Object.fromEntries(generationEntries.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))),
         generationVersions: Object.fromEntries(generationVersionEntries),
-        storyboardInputs: storyboardInputs.map(storyInputView),
+        storyboardInputs: storyboardInputs.map(storyInputView).filter((input) => input.kind === "storyboard"),
       };
     }
   }

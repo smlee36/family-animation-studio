@@ -14,6 +14,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as Record<string, unknown>;
     const id = typeof body.id === "string" ? body.id : "";
+    const kind = body.kind === "photo" ? "photo" as const : "storyboard" as const;
     const name = typeof body.name === "string" ? body.name.trim().slice(0, 120) : "";
     const imagePathname = typeof body.imagePathname === "string" ? body.imagePathname : "";
     const contentType = typeof body.contentType === "string" ? body.contentType : "";
@@ -22,7 +23,7 @@ export async function POST(request: NextRequest) {
     if (!/^[0-9a-f-]{36}$/i.test(id) || !match || match[1] !== id || !name || !ALLOWED_TYPES.has(contentType) || size <= 0 || size > 20 * 1024 * 1024) {
       return jsonError("이미지 정보가 올바르지 않습니다.", 400, requestId);
     }
-    const record: StoryInputRecord = { version: 1, id, name, imagePathname, contentType, size, createdAt: new Date().toISOString() };
+    const record: StoryInputRecord = { version: 1, id, kind, name, imagePathname, contentType, size, createdAt: new Date().toISOString() };
     await saveStoryInput(record);
     return NextResponse.json({ input: storyInputView(record), requestId });
   } catch (error) {

@@ -1,6 +1,7 @@
 export type StoryInputRecord = {
   version: 1;
   id: string;
+  kind?: "storyboard" | "photo";
   name: string;
   imagePathname: string;
   contentType: string;
@@ -9,6 +10,7 @@ export type StoryInputRecord = {
 };
 
 export type StoryInputView = Pick<StoryInputRecord, "id" | "name" | "contentType" | "size" | "createdAt"> & {
+  kind: "storyboard" | "photo";
   imageUrl: string;
 };
 
@@ -17,6 +19,7 @@ export function isStoryInputRecord(value: unknown): value is StoryInputRecord {
   const record = value as Partial<StoryInputRecord>;
   return record.version === 1 &&
     typeof record.id === "string" &&
+    (record.kind === undefined || record.kind === "storyboard" || record.kind === "photo") &&
     typeof record.name === "string" &&
     typeof record.imagePathname === "string" &&
     typeof record.contentType === "string" &&
@@ -27,6 +30,7 @@ export function isStoryInputRecord(value: unknown): value is StoryInputRecord {
 export function storyInputView(record: StoryInputRecord): StoryInputView {
   return {
     id: record.id,
+    kind: record.kind || "storyboard",
     name: record.name,
     contentType: record.contentType,
     size: record.size,
