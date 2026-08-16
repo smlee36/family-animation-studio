@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import runpy
-import subprocess
 import sys
 from pathlib import Path
 
@@ -19,9 +18,11 @@ PRESETS = {
 
 
 def job_segment_count(job_id: str) -> int:
-    job_root = ROOT / "jobs" / job_id
-    job = json.loads((job_root / "job.json").read_text(encoding="utf-8"))
-    return 2 if len(job.get("input_filenames") or [job["input_filename"]]) == 3 else 1
+    # Three-photo stories are generated in one diffusion timeline. Running two
+    # independent five-second jobs and concatenating them makes motion reset at
+    # the middle keyframe, which is visible as a cut even when the boundary
+    # frames themselves match.
+    return 1
 
 
 def argv_for_job(job_id: str, offload_mode: str | None = None, segment_index: int = 0) -> list[str]:
@@ -29,22 +30,22 @@ def argv_for_job(job_id: str, offload_mode: str | None = None, segment_index: in
     job = json.loads((job_root / "job.json").read_text(encoding="utf-8"))
     input_filenames = job.get("input_filenames") or [job["input_filename"]]
     connected = len(input_filenames) == 3
-    if connected and segment_index not in {0, 1}:
-        raise ValueError("Connected LTX jobs have exactly two segments")
+    if segment_index != 0:
+        raise ValueError("LTX jobs use one continuous timeline")
     preset = PRESETS[job["preset"]]
     preview = job.get("render_mode", "final") == "preview"
     if preview:
         width, height = (448, 768) if job["aspect_ratio"] == "9:16" else (768, 448)
     else:
         width, height = (576, 1024) if job["aspect_ratio"] == "9:16" else (1280, 704)
-    segment_duration = 5 if connected else job["duration_seconds"]
-    num_frames = segment_duration * 24 + 1
-    output_path = job_root / (f"segment-{segment_index:02d}.mp4" if connected else "output.mp4")
+    num_frames = job["duration_seconds"] * 24 + 1
+    output_path = job_root / "output.mp4"
     image_args = ["--image", str(job_root / input_filenames[0]), "0", "1.0"]
     if connected:
         image_args = [
-            "--image", str(job_root / input_filenames[segment_index]), "0", "1.0",
-            "--image", str(job_root / input_filenames[segment_index + 1]), str(num_frames - 1), "1.0",
+            "--image", str(job_root / input_filenames[0]), "0", "1.0",
+            "--image", str(job_root / input_filenames[1]), str((num_frames - 1) // 2), "1.0",
+            "--image", str(job_root / input_filenames[2]), str(num_frames - 1), "1.0",
         ]
     return [
         "ltx_pipelines.ti2vid_two_stages_hq",
@@ -70,22 +71,9 @@ def argv_for_job(job_id: str, offload_mode: str | None = None, segment_index: in
 
 
 def finalize_segments(job_id: str) -> None:
-    if job_segment_count(job_id) == 1:
-        return
-    job_root = ROOT / "jobs" / job_id
-    concat_path = job_root / "segments.txt"
-    concat_path.write_text("file 'segment-00.mp4'\nfile 'segment-01.mp4'\n", encoding="utf-8")
-    concat_path.chmod(0o600)
-    result = subprocess.run(
-        [
-            "/usr/bin/ffmpeg", "-y", "-hide_banner", "-f", "concat", "-safe", "0",
-            "-i", str(concat_path), "-c", "copy", "-movflags", "+faststart", str(job_root / "output.mp4"),
-        ],
-        cwd=job_root,
-        check=False,
-    )
-    if result.returncode != 0 or not (job_root / "output.mp4").is_file():
-        raise RuntimeError("Could not join the two connected LTX segments")
+    # Stable hook retained for the resident runner. Connected jobs now write
+    # output.mp4 directly from one continuous generation.
+    return
 
 
 def main() -> None:
