@@ -1,0 +1,150 @@
+# Workflow registry.
+#
+# Each entry pairs an API-format ComfyUI graph with *bindings*: a map from a
+# logical parameter name the pipeline knows about (prompt, width, seed, ...) to
+# the concrete node input(s) it should be written into. Binding by node _meta
+# title rather than node id means you can rearrange or renumber a graph in the
+# ComfyUI editor and the pipeline keeps working, as long as the B200:: titles
+# survive. A parameter may drive several inputs (frame_rate feeds both the
+# conditioning and the muxer); `scale` multiplies the value for that target.
+#
+# SCHEMA CAVEAT: the class_type names in the graph files reflect the LTXV/Wan
+# ComfyUI node sets and could NOT be verified against a live server while these
+# files were written (no network access to the node repos). Before the first
+# real run, execute:
+#     python -m pipeline.doctor --url http://127.0.0.1:8188
+# It diffs every class_type and every bound input against the server's live
+# /object_info and prints exact replacements for anything that moved.
+
+version: 1
+
+defaults:
+  negative_prompt: "worst quality, blurry, jittery, distorted, warped face, extra limbs, watermark, text"
+  frame_rate: 24
+
+workflows:
+  ltx_i2v:
+    label: "LTX image-to-video (single start frame)"
+    graph: ltx_i2v.json
+    model: ltx
+    requires: [image_start]
+    accepts: [image_start]
+    bindings:
+      prompt:          [{ title: "B200::prompt", input: text }]
+      negative_prompt: [{ title: "B200::negative", input: text }]
+      image_start:     [{ title: "B200::image_start", input: image }]
+      width:           [{ title: "B200::i2v", input: width }]
+      height:          [{ title: "B200::i2v", input: height }]
+      length:          [{ title: "B200::i2v", input: length }]
+      frame_rate:
+        - { title: "B200::conditioning", input: frame_rate }
+        - { title: "B200::output", input: frame_rate }
+      steps:           [{ title: "B200::scheduler", input: steps }]
+      cfg:             [{ title: "B200::sampler", input: cfg }]
+      seed:            [{ title: "B200::sampler", input: noise_seed }]
+      sampler_name:    [{ title: "B200::sampler_select", input: sampler_name }]
+      max_shift:       [{ title: "B200::scheduler", input: max_shift }]
+      base_shift:      [{ title: "B200::scheduler", input: base_shift }]
+      terminal:        [{ title: "B200::scheduler", input: terminal }]
+      checkpoint:      [{ title: "B200::checkpoint", input: ckpt_name }]
+      text_encoder:    [{ title: "B200::text_encoder", input: clip_name }]
+      filename_prefix: [{ title: "B200::output", input: filename_prefix }]
+    output_title: "B200::output"
+
+  ltx_i2v_firstlast:
+    label: "LTX image-to-video (first + last frame conditioning)"
+    graph: ltx_i2v_firstlast.json
+    model: ltx
+    requires: [image_start, image_end]
+    accepts: [image_start, image_end]
+    bindings:
+      prompt:          [{ title: "B200::prompt", input: text }]
+      negative_prompt: [{ title: "B200::negative", input: text }]
+      image_start:     [{ title: "B200::image_start", input: image }]
+      image_end:       [{ title: "B200::image_end", input: image }]
+      width:           [{ title: "B200::latent", input: width }]
+      height:          [{ title: "B200::latent", input: height }]
+      length:          [{ title: "B200::latent", input: length }]
+      frame_rate:
+        - { title: "B200::conditioning", input: frame_rate }
+        - { title: "B200::output", input: frame_rate }
+      steps:           [{ title: "B200::scheduler", input: steps }]
+      cfg:             [{ title: "B200::sampler", input: cfg }]
+      seed:            [{ title: "B200::sampler", input: noise_seed }]
+      sampler_name:    [{ title: "B200::sampler_select", input: sampler_name }]
+      max_shift:       [{ title: "B200::scheduler", input: max_shift }]
+      base_shift:      [{ title: "B200::scheduler", input: base_shift }]
+      terminal:        [{ title: "B200::scheduler", input: terminal }]
+      # How hard the guides pin the endpoints. Lower the end strength if the
+      # clip snaps unnaturally into the last frame.
+      guide_strength_start: [{ title: "B200::guide_start", input: strength }]
+      guide_strength_end:   [{ title: "B200::guide_end", input: strength }]
+      checkpoint:      [{ title: "B200::checkpoint", input: ckpt_name }]
+      text_encoder:    [{ title: "B200::text_encoder", input: clip_name }]
+      filename_prefix: [{ title: "B200::output", input: filename_prefix }]
+    output_title: "B200::output"
+
+  ltx_i2v_firstlast_post:
+    label: "LTX first+last frame, then 4x upscale -> 1080p -> 2x frame interpolation"
+    graph: ltx_i2v_firstlast_post.json
+    model: ltx
+    requires: [image_start, image_end]
+    accepts: [image_start, image_end]
+    bindings:
+      prompt:          [{ title: "B200::prompt", input: text }]
+      negative_prompt: [{ title: "B200::negative", input: text }]
+      image_start:     [{ title: "B200::image_start", input: image }]
+      image_end:       [{ title: "B200::image_end", input: image }]
+      # Generation resolution stays at the model's sweet spot; the post chain
+      # takes it to the delivery resolution below.
+      width:           [{ title: "B200::latent", input: width }]
+      height:          [{ title: "B200::latent", input: height }]
+      length:          [{ title: "B200::latent", input: length }]
+      out_width:       [{ title: "B200::resize", input: width }]
+      out_height:      [{ title: "B200::resize", input: height }]
+      frame_rate:
+        - { title: "B200::conditioning", input: frame_rate }
+        # The muxer must run at generated_fps * interpolation multiplier or the
+        # clip plays back in slow motion.
+        - { title: "B200::output", input: frame_rate, scale_by: interpolate_multiplier }
+      interpolate_multiplier: [{ title: "B200::interpolate", input: multiplier }]
+      steps:           [{ title: "B200::scheduler", input: steps }]
+      cfg:             [{ title: "B200::sampler", input: cfg }]
+      seed:            [{ title: "B200::sampler", input: noise_seed }]
+      sampler_name:    [{ title: "B200::sampler_select", input: sampler_name }]
+      max_shift:       [{ title: "B200::scheduler", input: max_shift }]
+      base_shift:      [{ title: "B200::scheduler", input: base_shift }]
+      terminal:        [{ title: "B200::scheduler", input: terminal }]
+      guide_strength_start: [{ title: "B200::guide_start", input: strength }]
+      guide_strength_end:   [{ title: "B200::guide_end", input: strength }]
+      checkpoint:      [{ title: "B200::checkpoint", input: ckpt_name }]
+      text_encoder:    [{ title: "B200::text_encoder", input: clip_name }]
+      upscale_model:   [{ title: "B200::upscale_model", input: model_name }]
+      filename_prefix: [{ title: "B200::output", input: filename_prefix }]
+    output_title: "B200::output"
+
+  wan_i2v:
+    label: "Wan 2.2 I2V-A14B (single start frame)"
+    graph: wan_i2v.json
+    model: wan
+    requires: [image_start]
+    accepts: [image_start]
+    bindings:
+      prompt:          [{ title: "B200::prompt", input: text }]
+      negative_prompt: [{ title: "B200::negative", input: text }]
+      image_start:     [{ title: "B200::image_start", input: image }]
+      width:           [{ title: "B200::i2v", input: width }]
+      height:          [{ title: "B200::i2v", input: height }]
+      length:          [{ title: "B200::i2v", input: length }]
+      frame_rate:      [{ title: "B200::output", input: frame_rate }]
+      steps:           [{ title: "B200::sampler", input: steps }]
+      cfg:             [{ title: "B200::sampler", input: cfg }]
+      seed:            [{ title: "B200::sampler", input: seed }]
+      sampler_name:    [{ title: "B200::sampler", input: sampler_name }]
+      shift:           [{ title: "B200::model_sampling", input: shift }]
+      checkpoint:      [{ title: "B200::checkpoint", input: unet_name }]
+      text_encoder:    [{ title: "B200::text_encoder", input: clip_name }]
+      vae:             [{ title: "B200::vae", input: vae_name }]
+      clip_vision:     [{ title: "B200::clip_vision", input: clip_name }]
+      filename_prefix: [{ title: "B200::output", input: filename_prefix }]
+    output_title: "B200::output"

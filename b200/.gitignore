@@ -1,0 +1,13 @@
+# Model weights, ComfyUI checkout, logs, HF cache — everything big and derived.
+.work/
+.env
+
+# Family media stays out of the repo.
+keyframes/*
+!keyframes/README.md
+clips/
+sweeps/
+
+__pycache__/
+*.pyc
+.pytest_cache/

@@ -1,0 +1,23 @@
+# ComfyUI custom nodes installed by scripts/10_install_comfyui.sh
+# Format: <directory name>|<git url>
+# Lines starting with # are ignored. Order matters only for dependency installs.
+
+# Node manager — lets you resolve any node that turns out to be missing from the
+# GUI instead of hand-cloning it.
+ComfyUI-Manager|https://github.com/ltdrdata/ComfyUI-Manager.git
+
+# LTX-Video nodes, published by the model authors (Lightricks). ComfyUI core has
+# carried native LTXV nodes since 0.9.x, but the upstream node pack is what
+# tracks new model generations first. scripts/40_smoke_test.sh and
+# `python -m pipeline.doctor` report which LTX node classes your install
+# actually exposes — trust that over any list written ahead of time.
+ComfyUI-LTXVideo|https://github.com/Lightricks/ComfyUI-LTXVideo.git
+
+# Video encode/decode, frame batch <-> mp4 muxing. Used by every workflow here.
+ComfyUI-VideoHelperSuite|https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git
+
+# RIFE / FILM frame interpolation for the Phase 2 post stage.
+ComfyUI-Frame-Interpolation|https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git
+
+# Phase 4: Wan 2.2 support. Comment out if you are not running the comparison.
+ComfyUI-WanVideoWrapper|https://github.com/kijai/ComfyUI-WanVideoWrapper.git

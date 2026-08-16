@@ -1,0 +1,65 @@
+# Bring up with:  docker compose -f b200/docker/docker-compose.yml up -d
+# Then:           docker compose -f b200/docker/docker-compose.yml exec comfy bash
+#
+# Requires the NVIDIA Container Toolkit on the host
+# (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/).
+
+services:
+  comfy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        # Override to a newer NGC tag as they are published.
+        NGC_TAG: ${NGC_TAG:-25.08-py3}
+    image: b200-ltx:local
+    container_name: b200-comfy
+    restart: unless-stopped
+
+    # GPU passthrough. `count: all` exposes every B200 in the box; pin with
+    # device_ids: ["0"] if you want to leave GPUs free for other work.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # NGC's own guidance for these containers: without them, NCCL and the
+    # dataloader hit "bus error" / "insufficient shared memory" on big tensors.
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+
+    volumes:
+      # Model store and ComfyUI checkout live on the host so rebuilding the
+      # image never re-downloads hundreds of GB.
+      - ${B200_WORKDIR:-../.work}:/work
+      # Batch pipeline I/O.
+      - ../keyframes:/data/keyframes
+      - ../clips:/data/clips
+      # Live-edit scripts without a rebuild.
+      - ../scripts:/opt/b200/scripts:ro
+      - ../pipeline:/opt/b200/pipeline:ro
+      - ../config:/opt/b200/config:ro
+      - ../workflows:/opt/b200/workflows:ro
+
+    environment:
+      COMFY_HOST: 0.0.0.0
+      COMFY_PORT: 8188
+      # Read from the host env / .env file; never bake a token into the image.
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_HOME: /work/hf-cache
+      HF_HUB_ENABLE_HF_TRANSFER: "1"
+
+    ports:
+      # Bound to loopback by default. ComfyUI has no authentication of its own,
+      # so do NOT publish this on a public interface — tunnel instead:
+      #   ssh -N -L 8188:127.0.0.1:8188 user@b200-host
+      # To deliberately expose it on the LAN, set COMFY_BIND=0.0.0.0.
+      - "${COMFY_BIND:-127.0.0.1}:8188:8188"
+
+    stdin_open: true
+    tty: true

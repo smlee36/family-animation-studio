@@ -1,0 +1,97 @@
+# Model registry.
+#
+# IMPORTANT — read before trusting the repo ids below.
+# These were written without network access to huggingface.co (the authoring
+# sandbox's egress policy blocked it), so the repo ids are CANDIDATES, not
+# verified facts. scripts/20_fetch_models.sh does not blindly trust them: it
+# queries the HF API, discovers what the `author` org actually publishes, keeps
+# only the repos that exist, and prints the real file tree before downloading.
+# Run `scripts/20_fetch_models.sh --model ltx --list` first and, if the resolved
+# repo differs from what is here, correct this file. That one edit is the only
+# place a model id lives.
+#
+# Fields per family:
+#   author          HF org used for auto-discovery when no candidate resolves
+#   discover        regex matched against repo ids under that org, newest wins
+#   candidates      tried in order before falling back to discovery
+#   include         glob patterns of files to pull (full precision first)
+#   exclude         glob patterns never pulled (quantised/duplicate formats)
+#   target          subdirectory under $MODELS_DIR
+#   workflow        default workflow key in workflows/index.yaml
+
+version: 1
+
+families:
+  ltx:
+    label: "LTX-Video (Lightricks)"
+    author: Lightricks
+    # Prefer a 2.5 generation repo; fall back through the lineage.
+    discover: '^Lightricks/LTX-(2\.5|2|Video).*'
+    prefer_order:
+      - '2\.5'
+      - '^Lightricks/LTX-2$'
+      - 'LTX-Video'
+    candidates:
+      - Lightricks/LTX-2.5
+      - Lightricks/LTX-2
+      - Lightricks/LTX-Video
+    # Full precision first: bf16/fp16 safetensors, not fp8/gguf/int8.
+    include:
+      - '*.safetensors'
+      - '*.json'
+      - '*.txt'
+      - '*.yaml'
+    exclude:
+      - '*fp8*'
+      - '*int8*'
+      - '*gguf*'
+      - '*.gguf'
+      - '*q4*'
+      - '*q8*'
+      - '*.bin'          # prefer safetensors when both are published
+      - 'onnx/*'
+    target: ltx
+    workflow: ltx_i2v
+
+    # Auxiliary encoders the LTX graphs need. Same caveat: resolved at runtime.
+    companions:
+      - repo: google/t5-v1_1-xxl
+        note: "text encoder; skip if the LTX repo already ships its own text_encoder/"
+        optional: true
+        include: ['*.safetensors', '*.json', 'spiece.model', 'tokenizer*']
+        exclude: ['*fp8*', '*.bin']
+        target: text_encoders/t5xxl
+
+  wan:
+    label: "Wan 2.2 I2V-A14B (MoE 27B, ~14B active)"
+    author: Wan-AI
+    discover: '^Wan-AI/Wan2\.2-I2V.*A14B.*'
+    prefer_order:
+      - 'A14B'
+    candidates:
+      - Wan-AI/Wan2.2-I2V-A14B
+      - Wan-AI/Wan2.2-I2V-A14B-Diffusers
+    include:
+      - '*.safetensors'
+      - '*.json'
+      - '*.txt'
+      - '*.pth'
+    exclude:
+      - '*fp8*'
+      - '*int8*'
+      - '*gguf*'
+      - '*.gguf'
+    target: wan
+    workflow: wan_i2v
+
+  # Post-processing assets for the Phase 2 upscale stage.
+  upscale:
+    label: "Real-ESRGAN 4x upscaler"
+    author: ai-forever
+    discover: '.*[Rr]eal.*ESRGAN.*'
+    candidates:
+      - ai-forever/Real-ESRGAN
+    include: ['*.pth', '*x4*']
+    exclude: ['*anime*']
+    target: upscale_models
+    optional: true
