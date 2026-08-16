@@ -8,6 +8,7 @@ import { getGeneration } from "@/lib/generations/storage";
 import { generationView, type LtxPreset, type LtxRenderMode, type VideoGenerationProvider } from "@/lib/generations/types";
 import { SceneMasterFrameError, type ContinuityFrameInput } from "@/lib/generations/veo";
 import { MAX_GENERATION_PROMPT_CHARS } from "@/lib/generations/prompt";
+import { getStoryInput } from "@/lib/story-inputs/storage";
 
 export const maxDuration = 300;
 
@@ -33,6 +34,8 @@ export async function POST(request: NextRequest) {
     const continuitySourceGenerationId = typeof body.continuitySourceGenerationId === "string" ? body.continuitySourceGenerationId.trim() : "";
     const sceneMasterGenerationId = typeof body.sceneMasterGenerationId === "string" ? body.sceneMasterGenerationId.trim() : "";
     const continuityFrameDataUrl = typeof body.continuityFrame === "string" ? body.continuityFrame.trim() : "";
+    const keyframePathnames = Array.isArray(body.keyframePathnames) ? body.keyframePathnames.filter((pathname): pathname is string => typeof pathname === "string") : [];
+    const keyframeMimeTypes = Array.isArray(body.keyframeMimeTypes) ? body.keyframeMimeTypes.filter((mimeType): mimeType is string => typeof mimeType === "string") : [];
     if (!shotId || shotId.length > 40 || (episodeId && !/^[0-9a-f-]{36}$/i.test(episodeId)) || prompt.length < 10 || prompt.length > MAX_GENERATION_PROMPT_CHARS || referenceIds.length > 6) {
       return jsonError("Shot 프롬프트 또는 Reference 정보를 확인해 주세요.", 400, requestId);
     }
@@ -44,6 +47,28 @@ export async function POST(request: NextRequest) {
     const isReelsEpisode = Boolean(episode && episode.format !== "landscape");
     if (isReelsEpisode && !scene) return jsonError("릴스 Scene과 Shot 정보를 확인해 주세요.", 400, requestId);
     const aspectRatio = isReelsEpisode ? "9:16" as const : "16:9" as const;
+    let keyframes: ContinuityFrameInput[] | undefined;
+    if (keyframePathnames.length || keyframeMimeTypes.length) {
+      if (provider !== "ltx" || !episode || keyframePathnames.length !== 3 || keyframeMimeTypes.length !== 3) {
+        return jsonError("연결 영상의 키프레임 정보를 확인해 주세요.", 400, requestId);
+      }
+      const episodeInputs = (await Promise.all((episode.storyboardInputIds || []).map((id) => getStoryInput(id))))
+        .filter((input): input is NonNullable<typeof input> => Boolean(input));
+      const allowedInputs = new Map(episodeInputs.map((input) => [input.imagePathname, input]));
+      if (keyframePathnames.some((pathname, index) => {
+        const input = allowedInputs.get(pathname);
+        return !input || input.kind !== "photo" || input.contentType !== keyframeMimeTypes[index];
+      })) {
+        return jsonError("Episode에 저장된 연결 사진을 찾을 수 없습니다.", 404, requestId);
+      }
+      keyframes = keyframePathnames.map((pathname, index) => ({
+        sourceGenerationId: "",
+        pathname,
+        mimeType: keyframeMimeTypes[index],
+        kind: "scene_master" as const,
+        model: "uploaded-photo-keyframe",
+      }));
+    }
     let continuityFrame: ContinuityFrameInput | undefined;
     if (continuitySourceGenerationId || continuityFrameDataUrl) {
       const frameMatch = continuityFrameDataUrl.match(CONTINUITY_FRAME_PATTERN);
@@ -98,7 +123,7 @@ export async function POST(request: NextRequest) {
       ...(scene?.sceneMasterReferenceId ? [scene.sceneMasterReferenceId] : []),
       ...referenceIds,
     ])].slice(0, 6);
-    const record = await startVideoGeneration({ id: randomUUID(), episodeId, shotId, prompt, estimatedSeconds, referenceIds: effectiveReferenceIds, provider, qualityTier: "fast", ltxPreset, ltxRenderMode, continuityFrame, aspectRatio });
+    const record = await startVideoGeneration({ id: randomUUID(), episodeId, shotId, prompt, estimatedSeconds, referenceIds: effectiveReferenceIds, provider, qualityTier: "fast", ltxPreset, ltxRenderMode, continuityFrame, keyframes, aspectRatio });
     console.info(`[video.start] requestId=${requestId} generationId=${record.id} provider=${provider} operation=${record.operationName} model=${record.model} tier=${record.qualityTier} aspectRatio=${aspectRatio} references=${record.usedReferenceIds.length} continuity=${Boolean(record.continuitySourceGenerationId)}`);
     return NextResponse.json({ generation: generationView(record), requestId }, { status: 202 });
   } catch (error) {

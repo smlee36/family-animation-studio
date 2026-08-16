@@ -7,7 +7,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from run_job import LTX_ROOT, ROOT, argv_for_job
+from run_job import LTX_ROOT, ROOT, argv_for_job, finalize_segments, job_segment_count
 
 
 SOCKET_PATH = ROOT / ".resident.sock"
@@ -63,8 +63,10 @@ def main() -> None:
                     break
                 job_id = str(request.get("job_id", ""))
                 try:
-                    sys.argv = argv_for_job(job_id, offload_mode="none")
-                    pipeline_module.main()
+                    for segment_index in range(job_segment_count(job_id)):
+                        sys.argv = argv_for_job(job_id, offload_mode="none", segment_index=segment_index)
+                        pipeline_module.main()
+                    finalize_segments(job_id)
                     send_json(connection, {"ok": True, "job_id": job_id})
                 except Exception as error:
                     traceback.print_exc()

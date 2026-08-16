@@ -18,6 +18,7 @@ export type StartVideoGenerationInput = {
   autoRegenerationCount?: number;
   parentGenerationId?: string;
   continuityFrame?: ContinuityFrameInput;
+  keyframes?: ContinuityFrameInput[];
   aspectRatio?: VideoAspectRatio;
 };
 

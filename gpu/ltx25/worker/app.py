@@ -602,6 +602,7 @@ async def create_job(
     render_mode: Literal["preview", "final"] = Form("preview"),
     seed: int = Form(42),
     image: UploadFile = File(...),
+    keyframe_images: list[UploadFile] | None = File(default=None),
 ) -> dict:
     if not JOB_ID_PATTERN.fullmatch(job_id):
         raise HTTPException(status_code=400, detail="Invalid job id")
@@ -615,26 +616,35 @@ async def create_job(
     if existing.is_file():
         return job_with_progress(load_job(job_id))
 
-    content_type = (image.content_type or "").lower()
-    extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}.get(content_type)
-    if not extension:
-        raise HTTPException(status_code=415, detail="Unsupported image type")
+    uploads = [image, *(keyframe_images or [])]
+    if len(uploads) not in {1, 3}:
+        raise HTTPException(status_code=400, detail="A connected video requires exactly three keyframes")
     destination_dir = job_dir(job_id)
     destination_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
-    input_filename = f"input{extension}"
-    destination = destination_dir / input_filename
-    size = 0
-    with destination.open("wb") as output:
-        while chunk := await image.read(1024 * 1024):
-            size += len(chunk)
-            if size > MAX_IMAGE_BYTES:
-                shutil.rmtree(destination_dir, ignore_errors=True)
-                raise HTTPException(status_code=413, detail="Image is too large")
-            output.write(chunk)
-    destination.chmod(0o600)
-    if size == 0:
-        shutil.rmtree(destination_dir, ignore_errors=True)
-        raise HTTPException(status_code=400, detail="Image is empty")
+    input_filenames: list[str] = []
+    input_bytes = 0
+    for index, upload in enumerate(uploads):
+        content_type = (upload.content_type or "").lower()
+        extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}.get(content_type)
+        if not extension:
+            shutil.rmtree(destination_dir, ignore_errors=True)
+            raise HTTPException(status_code=415, detail="Unsupported image type")
+        input_filename = f"input-{index:02d}{extension}"
+        destination = destination_dir / input_filename
+        size = 0
+        with destination.open("wb") as output:
+            while chunk := await upload.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_IMAGE_BYTES:
+                    shutil.rmtree(destination_dir, ignore_errors=True)
+                    raise HTTPException(status_code=413, detail="Image is too large")
+                output.write(chunk)
+        destination.chmod(0o600)
+        if size == 0:
+            shutil.rmtree(destination_dir, ignore_errors=True)
+            raise HTTPException(status_code=400, detail="Image is empty")
+        input_filenames.append(input_filename)
+        input_bytes += size
 
     timestamp = now_iso()
     job = {
@@ -647,8 +657,9 @@ async def create_job(
         "duration_seconds": duration_seconds,
         "render_mode": render_mode,
         "seed": seed,
-        "input_filename": input_filename,
-        "input_bytes": size,
+        "input_filename": input_filenames[0],
+        "input_filenames": input_filenames,
+        "input_bytes": input_bytes,
         "output_bytes": 0,
         "error": "",
         "created_at": timestamp,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import runpy
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,15 +18,34 @@ PRESETS = {
 }
 
 
-def argv_for_job(job_id: str, offload_mode: str | None = None) -> list[str]:
+def job_segment_count(job_id: str) -> int:
     job_root = ROOT / "jobs" / job_id
     job = json.loads((job_root / "job.json").read_text(encoding="utf-8"))
+    return 2 if len(job.get("input_filenames") or [job["input_filename"]]) == 3 else 1
+
+
+def argv_for_job(job_id: str, offload_mode: str | None = None, segment_index: int = 0) -> list[str]:
+    job_root = ROOT / "jobs" / job_id
+    job = json.loads((job_root / "job.json").read_text(encoding="utf-8"))
+    input_filenames = job.get("input_filenames") or [job["input_filename"]]
+    connected = len(input_filenames) == 3
+    if connected and segment_index not in {0, 1}:
+        raise ValueError("Connected LTX jobs have exactly two segments")
     preset = PRESETS[job["preset"]]
     preview = job.get("render_mode", "final") == "preview"
     if preview:
         width, height = (448, 768) if job["aspect_ratio"] == "9:16" else (768, 448)
     else:
         width, height = (576, 1024) if job["aspect_ratio"] == "9:16" else (1280, 704)
+    segment_duration = 5 if connected else job["duration_seconds"]
+    num_frames = segment_duration * 24 + 1
+    output_path = job_root / (f"segment-{segment_index:02d}.mp4" if connected else "output.mp4")
+    image_args = ["--image", str(job_root / input_filenames[0]), "0", "1.0"]
+    if connected:
+        image_args = [
+            "--image", str(job_root / input_filenames[segment_index]), "0", "1.0",
+            "--image", str(job_root / input_filenames[segment_index + 1]), str(num_frames - 1), "1.0",
+        ]
     return [
         "ltx_pipelines.ti2vid_two_stages_hq",
         "--transformer-path", str(MODEL_ROOT / "diffusion_models/ltx-2.5-22b-dev-transformer-bf16.safetensors"),
@@ -35,10 +55,10 @@ def argv_for_job(job_id: str, offload_mode: str | None = None) -> list[str]:
         "--distilled-lora", str(MODEL_ROOT / "loras/ltx-2.5-22b-distilled-lora-450-bf16.safetensors"), "1.0",
         "--spatial-upsampler-path", str(MODEL_ROOT / "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"),
         "--prompt", job["prompt"],
-        "--output-path", str(job_root / "output.mp4"),
-        "--image", str(job_root / job["input_filename"]), "0", "1.0",
+        "--output-path", str(output_path),
+        *image_args,
         "--height", str(height), "--width", str(width),
-        "--num-frames", str(job["duration_seconds"] * 24 + 1),
+        "--num-frames", str(num_frames),
         "--frame-rate", "24",
         "--num-inference-steps", str(8 if preview else preset["steps"]),
         "--video-cfg-guidance-scale", str(preset["cfg"]),
@@ -49,10 +69,32 @@ def argv_for_job(job_id: str, offload_mode: str | None = None) -> list[str]:
     ]
 
 
+def finalize_segments(job_id: str) -> None:
+    if job_segment_count(job_id) == 1:
+        return
+    job_root = ROOT / "jobs" / job_id
+    concat_path = job_root / "segments.txt"
+    concat_path.write_text("file 'segment-00.mp4'\nfile 'segment-01.mp4'\n", encoding="utf-8")
+    concat_path.chmod(0o600)
+    result = subprocess.run(
+        [
+            "/usr/bin/ffmpeg", "-y", "-hide_banner", "-f", "concat", "-safe", "0",
+            "-i", str(concat_path), "-c", "copy", "-movflags", "+faststart", str(job_root / "output.mp4"),
+        ],
+        cwd=job_root,
+        check=False,
+    )
+    if result.returncode != 0 or not (job_root / "output.mp4").is_file():
+        raise RuntimeError("Could not join the two connected LTX segments")
+
+
 def main() -> None:
-    sys.argv = argv_for_job(sys.argv[1])
+    job_id = sys.argv[1]
     os.chdir(LTX_ROOT)
-    runpy.run_module("ltx_pipelines.ti2vid_two_stages_hq", run_name="__main__")
+    for segment_index in range(job_segment_count(job_id)):
+        sys.argv = argv_for_job(job_id, segment_index=segment_index)
+        runpy.run_module("ltx_pipelines.ti2vid_two_stages_hq", run_name="__main__")
+    finalize_segments(job_id)
 
 
 if __name__ == "__main__":

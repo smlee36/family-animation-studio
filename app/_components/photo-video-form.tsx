@@ -38,6 +38,7 @@ export function PhotoVideoForm() {
   const [durationSeconds, setDurationSeconds] = useState<LtxDurationSeconds>(5);
   const [renderMode, setRenderMode] = useState<LtxRenderMode>("preview");
   const [highSpeedBatch, setHighSpeedBatch] = useState(true);
+  const [connectPhotos, setConnectPhotos] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const photosRef = useRef(photos);
@@ -63,7 +64,10 @@ export function PhotoVideoForm() {
       return;
     }
     const accepted = files.slice(0, available).map((file) => ({ id: crypto.randomUUID(), file, previewUrl: URL.createObjectURL(file) }));
-    setPhotos((current) => [...current, ...accepted]);
+    const nextPhotos = [...photos, ...accepted];
+    setPhotos(nextPhotos);
+    setConnectPhotos(nextPhotos.length === 3);
+    if (nextPhotos.length === 3) setDurationSeconds(10);
     if (files.length > available) {
       setError(`사진은 최대 ${MAX_PHOTO_COUNT}장까지 선택할 수 있어요. 앞의 ${available}장만 추가했습니다.`);
       return;
@@ -74,7 +78,9 @@ export function PhotoVideoForm() {
   function removePhoto(id: string) {
     const selected = photos.find((photo) => photo.id === id);
     if (selected) URL.revokeObjectURL(selected.previewUrl);
-    setPhotos((current) => current.filter((photo) => photo.id !== id));
+    const nextPhotos = photos.filter((photo) => photo.id !== id);
+    setPhotos(nextPhotos);
+    if (nextPhotos.length !== 3) setConnectPhotos(false);
   }
 
   async function uploadPhoto(photo: File) {
@@ -116,7 +122,7 @@ export function PhotoVideoForm() {
       const response = await fetch("/api/photo-video", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ inputIds: inputs.map((input) => input.id), instruction: instruction.trim(), format, durationSeconds, renderMode, highSpeedBatch }),
+        body: JSON.stringify({ inputIds: inputs.map((input) => input.id), instruction: instruction.trim(), format, durationSeconds: connectPhotos ? 10 : durationSeconds, renderMode, highSpeedBatch, connectPhotos }),
       });
       const body = (await response.json()) as PhotoVideoResponse;
       if (!response.ok || !body.episodeId) {
@@ -135,7 +141,7 @@ export function PhotoVideoForm() {
       <div className="photo-video-heading">
         <span className="eyebrow">PHOTO TO VIDEO</span>
         <h2>사진 여러 장을 바로 영상으로</h2>
-        <p>최대 10장을 한 번에 올리면 사진마다 하나의 Scene과 LTX 영상을 만들어 같은 Episode에 저장합니다.</p>
+        <p>사진 3장은 하나의 10초 연결 영상으로 만들 수 있고, 그 외에는 사진마다 별도 LTX 영상으로 저장합니다.</p>
       </div>
 
       {photos.length ? (
@@ -180,6 +186,20 @@ export function PhotoVideoForm() {
         />
       </label>
 
+      {photos.length === 3 ? (
+        <fieldset className="photo-sequence-selector" disabled={pending}>
+          <legend>사진 3장 만들기 방식</legend>
+          <label className={connectPhotos ? "selected" : ""}>
+            <input type="radio" name="photo-sequence-mode" checked={connectPhotos} onChange={() => { setConnectPhotos(true); setDurationSeconds(10); }} />
+            <span><strong>10초 연결 영상 한 편</strong><small>1→2, 2→3을 각 5초로 만들고 자동 연결</small></span>
+          </label>
+          <label className={!connectPhotos ? "selected" : ""}>
+            <input type="radio" name="photo-sequence-mode" checked={!connectPhotos} onChange={() => setConnectPhotos(false)} />
+            <span><strong>사진별 영상 3개</strong><small>각 사진을 독립된 영상으로 생성</small></span>
+          </label>
+        </fieldset>
+      ) : null}
+
       <fieldset className="format-selector photo-format-selector" disabled={pending}>
         <legend>영상 형식</legend>
         <label className={format === "reels" ? "selected" : ""}>
@@ -192,15 +212,19 @@ export function PhotoVideoForm() {
         </label>
       </fieldset>
 
-      <fieldset className="photo-duration-selector" disabled={pending}>
-        <legend>영상 길이</legend>
-        {([5, 10] as const).map((seconds) => (
-          <label className={durationSeconds === seconds ? "selected" : ""} key={seconds}>
-            <input type="radio" name="photo-duration" checked={durationSeconds === seconds} onChange={() => setDurationSeconds(seconds)} />
-            <span>{seconds}초</span>
-          </label>
-        ))}
-      </fieldset>
+      {connectPhotos ? (
+        <div className="photo-connected-duration"><strong>최종 길이 10초</strong><small>사진 1→2 약 5초 + 사진 2→3 약 5초</small></div>
+      ) : (
+        <fieldset className="photo-duration-selector" disabled={pending}>
+          <legend>영상 길이</legend>
+          {([5, 10] as const).map((seconds) => (
+            <label className={durationSeconds === seconds ? "selected" : ""} key={seconds}>
+              <input type="radio" name="photo-duration" checked={durationSeconds === seconds} onChange={() => setDurationSeconds(seconds)} />
+              <span>{seconds}초</span>
+            </label>
+          ))}
+        </fieldset>
+      )}
 
       <fieldset className="photo-render-selector" disabled={pending}>
         <legend>생성 품질</legend>
@@ -220,7 +244,7 @@ export function PhotoVideoForm() {
       </label>
 
       <button className="primary-button" type="submit" disabled={!photos.length || pending}>
-        {pending ? <><span className="button-spinner" aria-hidden="true" />B200에 {photos.length}개 영상 작업을 등록하고 있어요…</> : photos.length ? `${photos.length}장 ${renderMode === "preview" ? "미리보기" : "고화질"} 만들기` : "사진을 선택해 주세요"}
+        {pending ? <><span className="button-spinner" aria-hidden="true" />B200에 {connectPhotos ? "10초 연결 영상" : `${photos.length}개 영상`} 작업을 등록하고 있어요…</> : photos.length ? connectPhotos ? `3장 연결 10초 ${renderMode === "preview" ? "미리보기" : "고화질"} 만들기` : `${photos.length}장 ${renderMode === "preview" ? "미리보기" : "고화질"} 만들기` : "사진을 선택해 주세요"}
       </button>
       {pending ? <p className="phase-note" role="status">등록이 끝나면 생성 화면으로 이동합니다. 이후 페이지를 닫아도 B200 작업은 계속돼요.</p> : null}
       {error ? <p className="feedback" role="alert">{error}</p> : null}

@@ -49,6 +49,8 @@ export type ShotGenerationRecord = {
   continuitySourceGenerationId?: string;
   continuityFramePathname?: string;
   continuityFrameMimeType?: string;
+  keyframePathnames?: string[];
+  keyframeMimeTypes?: string[];
   initialFrameKind?: InitialFrameKind;
   initialFrameModel?: string;
   status: ShotGenerationStatus;
@@ -88,6 +90,8 @@ export type ShotGenerationView = Pick<
   backendQueuePosition: number;
   backendStartedAt: string;
   estimatedSecondsRemaining: number;
+  keyframePathnames: string[];
+  keyframeMimeTypes: string[];
 };
 
 export function generationView(record: ShotGenerationRecord): ShotGenerationView {
@@ -103,6 +107,8 @@ export function generationView(record: ShotGenerationRecord): ShotGenerationView
     backendQueuePosition: record.backendQueuePosition || 0,
     backendStartedAt: record.backendStartedAt || "",
     estimatedSecondsRemaining: Math.max(0, record.estimatedSecondsRemaining || 0),
+    keyframePathnames: record.keyframePathnames || [],
+    keyframeMimeTypes: record.keyframeMimeTypes || [],
     prompt: record.prompt,
     continuitySourceGenerationId: record.continuitySourceGenerationId || "",
     initialFrameKind: record.initialFrameKind || "",
@@ -140,6 +146,8 @@ export function isShotGenerationRecord(value: unknown): value is ShotGenerationR
     (record.continuitySourceGenerationId === undefined || typeof record.continuitySourceGenerationId === "string") &&
     (record.continuityFramePathname === undefined || typeof record.continuityFramePathname === "string") &&
     (record.continuityFrameMimeType === undefined || typeof record.continuityFrameMimeType === "string") &&
+    (record.keyframePathnames === undefined || (Array.isArray(record.keyframePathnames) && record.keyframePathnames.every((pathname) => typeof pathname === "string"))) &&
+    (record.keyframeMimeTypes === undefined || (Array.isArray(record.keyframeMimeTypes) && record.keyframeMimeTypes.every((mimeType) => typeof mimeType === "string"))) &&
     (record.initialFrameKind === undefined || record.initialFrameKind === "continuity" || record.initialFrameKind === "scene_master") &&
     (record.initialFrameModel === undefined || typeof record.initialFrameModel === "string") &&
     (record.status === "generating" || record.status === "ready" || record.status === "failed") &&

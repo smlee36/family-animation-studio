@@ -178,6 +178,7 @@ export async function startLtxGeneration(input: {
   autoRegenerationCount?: number;
   parentGenerationId?: string;
   continuityFrame?: ContinuityFrameInput;
+  keyframes?: ContinuityFrameInput[];
   aspectRatio?: VideoAspectRatio;
   ltxPreset?: LtxPreset;
   ltxRenderMode?: LtxRenderMode;
@@ -204,6 +205,8 @@ export async function startLtxGeneration(input: {
     continuitySourceGenerationId: input.continuityFrame?.sourceGenerationId || "",
     continuityFramePathname: input.continuityFrame?.pathname || "",
     continuityFrameMimeType: input.continuityFrame?.mimeType || "",
+    keyframePathnames: input.keyframes?.map((frame) => frame.pathname || "").filter(Boolean) || [],
+    keyframeMimeTypes: input.keyframes?.map((frame) => frame.mimeType || "").filter(Boolean) || [],
     initialFrameKind: input.continuityFrame?.kind,
     initialFrameModel: input.continuityFrame?.model || "",
     status: "generating",
@@ -225,12 +228,17 @@ export async function startLtxGeneration(input: {
   if (record.episodeId) await linkGenerationToEpisode(record.episodeId, record.shotId, record.id);
 
   try {
-    const startFrame = await prepareStartFrame({ ...input, aspectRatio });
+    const preparedKeyframes = input.keyframes?.length
+      ? await Promise.all(input.keyframes.map((continuityFrame) => prepareStartFrame({ ...input, id: input.id, aspectRatio, continuityFrame })))
+      : [];
+    const startFrame = preparedKeyframes[0] || await prepareStartFrame({ ...input, aspectRatio });
     record = {
       ...record,
       continuitySourceGenerationId: startFrame.sourceGenerationId,
       continuityFramePathname: startFrame.pathname,
       continuityFrameMimeType: startFrame.mimeType,
+      keyframePathnames: preparedKeyframes.map((frame) => frame.pathname),
+      keyframeMimeTypes: preparedKeyframes.map((frame) => frame.mimeType),
       initialFrameKind: startFrame.kind,
       initialFrameModel: startFrame.model,
       usedReferenceIds: startFrame.usedReferenceIds,
@@ -250,6 +258,10 @@ export async function startLtxGeneration(input: {
     form.set("duration_seconds", String(durationSeconds));
     form.set("seed", "42");
     form.set("image", new Blob([new Uint8Array(startFrame.bytes)], { type: startFrame.mimeType }), `start.${startFrame.mimeType === "image/png" ? "png" : startFrame.mimeType === "image/webp" ? "webp" : "jpg"}`);
+    for (const [index, frame] of preparedKeyframes.slice(1).entries()) {
+      const extension = frame.mimeType === "image/png" ? "png" : frame.mimeType === "image/webp" ? "webp" : "jpg";
+      form.append("keyframe_images", new Blob([new Uint8Array(frame.bytes)], { type: frame.mimeType }), `keyframe-${index + 2}.${extension}`);
+    }
     const response = await fetch(`${baseUrl}/jobs`, {
       method: "POST",
       headers: authenticatedHeaders(apiKey),

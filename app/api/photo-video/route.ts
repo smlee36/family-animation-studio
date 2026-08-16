@@ -29,6 +29,20 @@ function buildPrompt(instruction: string) {
   ].join("\n");
 }
 
+function buildConnectedPrompt(instruction: string) {
+  const motion = instruction || "가족이 첫 장면의 자세에서 다음 장면으로 자연스럽게 움직이며 침실에서 거실로 함께 걸어간다.";
+  return [
+    "Create a smooth 5-second motion segment between the supplied starting and ending keyframes. This segment belongs to one continuous 10-second Korean family watercolor storybook animation made from three ordered keyframes.",
+    "Match the first and final frame of this segment exactly to the supplied keyframes.",
+    "Preserve the same father and child identities, faces, hairstyles, ages, body proportions, clothing, illustration texture, and the same large brown teddy bear across the entire sequence.",
+    "Animate this action with physically natural, gentle movement:",
+    motion,
+    "Use smooth toddler walking, natural barefoot steps, subtle blinking and breathing, and a calm camera that follows the family without sudden zooms or angle changes.",
+    "The mother remains asleep whenever she is visible. Keep the teddy bear large, unchanged, and securely held by the child.",
+    "Stable faces, hands and feet, no duplicate people, no extra limbs, no new objects, no text, no photorealistic style change.",
+  ].join("\n");
+}
+
 export async function POST(request: NextRequest) {
   const requestId = randomUUID();
   const unauthorized = await requireApiSession();
@@ -48,8 +62,12 @@ export async function POST(request: NextRequest) {
     const durationSeconds = body.durationSeconds === 10 ? 10 : 5;
     const renderMode: LtxRenderMode = body.renderMode === "final" ? "final" : "preview";
     const highSpeedBatch = body.highSpeedBatch !== false;
+    const connectPhotos = body.connectPhotos === true;
     if (!inputIds.length || inputIds.length > 10 || inputIds.some((id) => !/^[0-9a-f-]{36}$/i.test(id)) || instruction.length > 1_000) {
       return jsonError("사진 또는 움직임 설명을 확인해 주세요.", 400, requestId);
+    }
+    if (connectPhotos && inputIds.length !== 3) {
+      return jsonError("10초 연결 영상은 순서대로 사용할 사진 3장이 필요합니다.", 400, requestId);
     }
 
     const loadedInputs = await Promise.all(inputIds.map((id) => getStoryInput(id)));
@@ -61,39 +79,43 @@ export async function POST(request: NextRequest) {
     }
 
     episodeId = randomUUID();
-    const prompt = buildPrompt(instruction);
+    const prompt = connectPhotos ? buildConnectedPrompt(instruction) : buildPrompt(instruction);
     const titleBase = inputs[0].name.replace(/\.[^.]+$/, "").trim().slice(0, 40) || "가족 사진";
-    const title = inputs.length === 1 ? `${titleBase} 영상` : `${titleBase} 외 ${inputs.length - 1}장 영상`;
+    const title = connectPhotos ? `${titleBase} 3장 연결 영상` : inputs.length === 1 ? `${titleBase} 영상` : `${titleBase} 외 ${inputs.length - 1}장 영상`;
     const action = instruction || "사진 속 가족이 편안하게 숨을 쉬며 자연스럽게 미소 짓는다.";
-    const scenes = inputs.map((input, index) => {
+    const scenes = (connectPhotos ? [inputs[0]] : inputs).map((input, index) => {
       const number = index + 1;
       const shotId = `${number}-1`;
+      const connectedAction = instruction || "아이가 큰 곰인형을 안고 아빠와 함께 침실에서 거실로 자연스럽게 걸어간다.";
       return {
         id: `scene-${number}`,
         number,
-        title: inputs.length === 1 ? "사진 속 순간" : `사진 ${String(number).padStart(2, "0")} 속 순간`,
-        summary: action,
-        setting: "업로드한 사진 속 장소와 배경",
+        title: connectPhotos ? "세 사진이 이어지는 10초 순간" : inputs.length === 1 ? "사진 속 순간" : `사진 ${String(number).padStart(2, "0")} 속 순간`,
+        summary: connectPhotos ? connectedAction : action,
+        setting: connectPhotos ? "업로드한 세 사진의 침실과 거실" : "업로드한 사진 속 장소와 배경",
         sceneMasterReferenceId: "",
         shots: [{
           id: shotId,
-          title: "사진이 움직이는 순간",
-          action,
-          estimatedSeconds: durationSeconds,
+          title: connectPhotos ? "세 장면이 자연스럽게 이어진다" : "사진이 움직이는 순간",
+          action: connectPhotos ? connectedAction : action,
+          estimatedSeconds: connectPhotos ? 10 : durationSeconds,
           referenceIds: [],
-          referenceReason: "사용자가 올린 사진 자체를 고정 시작 프레임으로 사용",
-          startState: "업로드한 사진과 정확히 같은 구도와 모습",
-          endState: `같은 인물과 배경을 유지하며 ${action}`,
+          referenceReason: connectPhotos ? "사용자가 올린 사진 3장을 시작·중간·끝 키프레임으로 고정" : "사용자가 올린 사진 자체를 고정 시작 프레임으로 사용",
+          startState: connectPhotos ? "첫 번째 사진과 정확히 같은 구도와 모습" : "업로드한 사진과 정확히 같은 구도와 모습",
+          endState: connectPhotos ? "세 번째 사진과 정확히 같은 구도와 모습" : `같은 인물과 배경을 유지하며 ${action}`,
           prompt,
         }],
         input,
+        keyframeInputs: connectPhotos ? inputs : [input],
       };
     });
     const plan: DirectorPlan = {
       title,
-      summary: `업로드한 사진 ${inputs.length}장을 각각 정확한 시작 화면으로 사용해 LTX 영상 ${inputs.length}개를 만듭니다.`,
-      totalEstimatedSeconds: durationSeconds * inputs.length,
-      totalShots: inputs.length,
+      summary: connectPhotos
+        ? "업로드한 사진 3장을 정확한 시작·중간·끝 키프레임으로 사용해 하나의 10초 LTX 영상을 만듭니다."
+        : `업로드한 사진 ${inputs.length}장을 각각 정확한 시작 화면으로 사용해 LTX 영상 ${inputs.length}개를 만듭니다.`,
+      totalEstimatedSeconds: connectPhotos ? 10 : durationSeconds * inputs.length,
+      totalShots: connectPhotos ? 1 : inputs.length,
       scenes: scenes.map(({ id, number, title: sceneTitle, summary, setting, sceneMasterReferenceId, shots }) => ({
         id,
         number,
@@ -136,10 +158,10 @@ export async function POST(request: NextRequest) {
           episodeId,
           shotId: scene.shots[0].id,
           prompt,
-          estimatedSeconds: durationSeconds,
+          estimatedSeconds: connectPhotos ? 10 : durationSeconds,
           referenceIds: [],
           provider: "ltx",
-          ltxPreset: presetForInstruction(instruction),
+          ltxPreset: connectPhotos ? "action" : presetForInstruction(instruction),
           ltxRenderMode: renderMode,
           aspectRatio: format === "reels" ? "9:16" : "16:9",
           continuityFrame: {
@@ -149,6 +171,13 @@ export async function POST(request: NextRequest) {
             kind: "scene_master",
             model: "uploaded-photo",
           },
+          keyframes: connectPhotos ? scene.keyframeInputs.map((keyframe) => ({
+            sourceGenerationId: "",
+            pathname: keyframe.imagePathname,
+            mimeType: keyframe.contentType,
+            kind: "scene_master" as const,
+            model: "uploaded-photo-keyframe",
+          })) : undefined,
         });
         generations.push(generationView(generation));
       } catch (error) {
@@ -156,7 +185,7 @@ export async function POST(request: NextRequest) {
         logServerError("photo-video.batch-item", error, requestId);
       }
     }
-    console.info(`[photo-video.start] requestId=${requestId} episodeId=${episodeId} requested=${inputs.length} started=${generations.length} failed=${failedCount} format=${format} duration=${durationSeconds} renderMode=${renderMode} highSpeedBatch=${highSpeedBatch}`);
+    console.info(`[photo-video.start] requestId=${requestId} episodeId=${episodeId} requested=${inputs.length} started=${generations.length} failed=${failedCount} format=${format} duration=${connectPhotos ? 10 : durationSeconds} connected=${connectPhotos} renderMode=${renderMode} highSpeedBatch=${highSpeedBatch}`);
     const warning = failedCount ? `${failedCount}개 영상은 등록하지 못했습니다. Episode에서 다시 시도해 주세요.` : "";
     return NextResponse.json({ episodeId, generation: generations[0], generations, warning, requestId }, { status: 202 });
   } catch (error) {

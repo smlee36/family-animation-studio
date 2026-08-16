@@ -805,6 +805,8 @@ export function Studio({
         backendQueuePosition: 0,
         backendStartedAt: "",
         estimatedSecondsRemaining: 0,
+        keyframePathnames: currentGeneration?.keyframePathnames || [],
+        keyframeMimeTypes: currentGeneration?.keyframeMimeTypes || [],
         prompt: shot.prompt,
         continuitySourceGenerationId,
         initialFrameKind: "",
@@ -843,6 +845,8 @@ export function Studio({
           continuityFrame,
           continuitySourceGenerationId,
           sceneMasterGenerationId: currentGeneration?.initialFrameKind === "scene_master" ? currentGeneration.id : "",
+          keyframePathnames: currentGeneration?.keyframePathnames || [],
+          keyframeMimeTypes: currentGeneration?.keyframeMimeTypes || [],
         }),
       });
       const startBody = (await startResponse.json()) as GenerationApiResponse;
@@ -873,6 +877,8 @@ export function Studio({
           backendQueuePosition: current[shot.id]?.backendQueuePosition || 0,
           backendStartedAt: current[shot.id]?.backendStartedAt || "",
           estimatedSecondsRemaining: current[shot.id]?.estimatedSecondsRemaining || 0,
+          keyframePathnames: current[shot.id]?.keyframePathnames || currentGeneration?.keyframePathnames || [],
+          keyframeMimeTypes: current[shot.id]?.keyframeMimeTypes || currentGeneration?.keyframeMimeTypes || [],
           prompt: current[shot.id]?.prompt || shot.prompt,
           continuitySourceGenerationId: current[shot.id]?.continuitySourceGenerationId || continuitySourceGenerationId,
           initialFrameKind: current[shot.id]?.initialFrameKind || "",
