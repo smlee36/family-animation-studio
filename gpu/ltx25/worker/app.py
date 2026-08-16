@@ -604,6 +604,7 @@ async def create_job(
     duration_seconds: int = Form(5),
     render_mode: Literal["preview", "final"] = Form("preview"),
     sequence_mode: Literal["timeline", "montage"] = Form("timeline"),
+    end_frame_strength: float = Form(1.0),
     seed: int = Form(42),
     image: UploadFile = File(...),
     keyframe_images: list[UploadFile] | None = File(default=None),
@@ -616,6 +617,8 @@ async def create_job(
         raise HTTPException(status_code=400, detail="Invalid seed")
     if duration_seconds not in {5, 10}:
         raise HTTPException(status_code=400, detail="Invalid duration")
+    if not 0.1 <= end_frame_strength <= 1.0:
+        raise HTTPException(status_code=400, detail="Invalid end frame strength")
     existing = metadata_path(job_id)
     if existing.is_file():
         return job_with_progress(load_job(job_id))
@@ -661,6 +664,7 @@ async def create_job(
         "duration_seconds": duration_seconds,
         "render_mode": render_mode,
         "sequence_mode": sequence_mode,
+        "end_frame_strength": end_frame_strength,
         "seed": seed,
         "input_filename": input_filenames[0],
         "input_filenames": input_filenames,
