@@ -25,7 +25,7 @@ def job_segment_count(job_id: str) -> int:
     if job.get("sequence_mode") == "montage":
         if len(input_filenames) != 3:
             raise ValueError("Montage mode requires exactly three ordered images")
-        return len(input_filenames)
+        return len(input_filenames) - 1
     return 1
 
 
@@ -48,7 +48,10 @@ def argv_for_job(job_id: str, offload_mode: str | None = None, segment_index: in
     output_path = job_root / (f"segment-{segment_index:02d}.mp4" if montage else "output.mp4")
     image_args = ["--image", str(job_root / input_filenames[0]), "0", "1.0"]
     if montage:
-        image_args = ["--image", str(job_root / input_filenames[segment_index]), "0", "1.0"]
+        image_args = [
+            "--image", str(job_root / input_filenames[segment_index]), "0", "1.0",
+            "--image", str(job_root / input_filenames[segment_index + 1]), str(num_frames - 1), "1.0",
+        ]
     elif connected:
         image_args = []
         last_frame = num_frames - 1
@@ -86,22 +89,20 @@ def finalize_segments(job_id: str) -> None:
     if job.get("sequence_mode") != "montage":
         return
 
-    inputs = [job_root / f"segment-{index:02d}.mp4" for index in range(3)]
+    inputs = [job_root / f"segment-{index:02d}.mp4" for index in range(2)]
     if any(not path.is_file() or path.stat().st_size == 0 for path in inputs):
         raise RuntimeError("A montage segment is missing")
     output_path = job_root / "output.mp4"
     filter_graph = (
-        "[0:v]trim=0:4.2,setpts=PTS-STARTPTS,fps=24,format=yuv420p[v0];"
-        "[1:v]trim=0:3.2,setpts=PTS-STARTPTS,fps=24,format=yuv420p[v1];"
-        "[2:v]trim=0:3.2,setpts=PTS-STARTPTS,fps=24,format=yuv420p[v2];"
-        "[v0][v1]xfade=transition=wipeleft:duration=0.30:offset=3.90[x1];"
-        "[x1][v2]xfade=transition=wipeleft:duration=0.30:offset=6.80[v]"
+        "[0:v]trim=0:5,setpts=PTS-STARTPTS,fps=24,format=yuv420p[v0];"
+        "[1:v]trim=0:5,setpts=PTS-STARTPTS,fps=24,format=yuv420p[v1];"
+        "[v0][v1]concat=n=2:v=1:a=0[v]"
     )
     command = [
         "/usr/bin/ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
-        "-i", str(inputs[0]), "-i", str(inputs[1]), "-i", str(inputs[2]),
+        "-i", str(inputs[0]), "-i", str(inputs[1]),
         "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
-        "-filter_complex", filter_graph, "-map", "[v]", "-map", "3:a",
+        "-filter_complex", filter_graph, "-map", "[v]", "-map", "2:a",
         "-c:v", "libx264", "-preset", "slow", "-crf", "17", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "128k", "-t", "10.0", "-movflags", "+faststart",
         str(output_path),

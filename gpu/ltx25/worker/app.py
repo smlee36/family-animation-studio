@@ -261,7 +261,7 @@ def parse_timestamp(value: str) -> float:
 def expected_runtime_seconds(job: dict) -> int:
     if job.get("sequence_mode") == "montage":
         per_segment = 150 if job.get("render_mode") == "preview" else 432
-        return per_segment * 3
+        return per_segment * 2
     if job.get("render_mode") == "preview":
         if int(job.get("duration_seconds", 5)) >= 10:
             return 240 if job.get("preset") == "gentle" else 300

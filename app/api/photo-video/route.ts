@@ -32,14 +32,14 @@ function buildPrompt(instruction: string) {
 function buildConnectedPrompt(instruction: string) {
   const motion = instruction || "가족이 첫 장면의 자세에서 다음 장면으로 자연스럽게 움직이며 침실에서 거실로 함께 걸어간다.";
   return [
-    "Create three short consecutive shots for one 10-second Korean family watercolor storybook animation.",
-    "Use each uploaded photo as the exact first frame and visual source of truth for its corresponding shot. The shots will be edited in the uploaded order.",
+    "Create a smooth continuous transition between the supplied starting and ending images for one Korean family watercolor storybook animation.",
+    "Match the supplied start and end images exactly. The system creates photo 1 to 2 and photo 2 to 3 separately, then joins both clips at their identical shared middle frame.",
     "Preserve the same father and child identities, faces, hairstyles, ages, body proportions, clothing, illustration texture, and the same large brown teddy bear across the entire sequence.",
     "Animate this action with physically natural, gentle movement:",
     motion,
     "Use smooth toddler walking, natural barefoot steps, subtle blinking and breathing, and a calm camera that follows the family without sudden zooms or angle changes.",
     "The mother remains asleep whenever she is visible. Keep the teddy bear large, unchanged, and securely held by the child.",
-    "Stable faces, hands and feet, no duplicate people, no extra limbs, no new objects, no text, no photorealistic style change.",
+    "Keep exactly one instance of every visible person. Stable faces, hands and feet, no duplicate people, no additional adult or child, no extra limbs, no new objects, no text, no photorealistic style change.",
   ].join("\n");
 }
 
