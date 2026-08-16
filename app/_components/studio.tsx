@@ -224,10 +224,7 @@ export function Studio({
   const [error, setError] = useState(initialEpisode?.episode.error || "");
   const [generations, setGenerations] = useState<Record<string, ShotGenerationView>>(initialEpisode?.generations || {});
   const [generationVersions, setGenerationVersions] = useState<Record<string, ShotGenerationView[]>>(initialEpisode?.generationVersions || {});
-  const [videoProvider, setVideoProvider] = useState<VideoGenerationProvider>(() => {
-    const existing = Object.values(initialEpisode?.generations || {}).find((generation) => generation.provider);
-    return existing?.provider || "ltx";
-  });
+  const [videoProvider, setVideoProvider] = useState<VideoGenerationProvider>("ltx");
   const [sceneFrames, setSceneFrames] = useState<Record<string, SceneFrameRecord>>(initialEpisode?.episode.sceneFrames || {});
   const [sceneFrameInstructions, setSceneFrameInstructions] = useState<Record<string, string>>({});
   const [sceneFrameMessages, setSceneFrameMessages] = useState<Record<string, string>>({});
