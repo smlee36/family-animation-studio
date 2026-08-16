@@ -47,7 +47,8 @@ def argv_for_job(job_id: str, offload_mode: str | None = None, segment_index: in
         intervals = len(input_filenames) - 1
         for index, input_filename in enumerate(input_filenames):
             frame_index = round(last_frame * index / intervals)
-            image_args.extend(["--image", str(job_root / input_filename), str(frame_index), "1.0"])
+            strength = 1.0 if index in {0, intervals} else 0.45
+            image_args.extend(["--image", str(job_root / input_filename), str(frame_index), str(strength)])
     return [
         "ltx_pipelines.ti2vid_two_stages_hq",
         "--transformer-path", str(MODEL_ROOT / "diffusion_models/ltx-2.5-22b-dev-transformer-bf16.safetensors"),
