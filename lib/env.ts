@@ -14,8 +14,8 @@ export function getEnvironmentStatus(): EnvironmentStatus {
     OPENAI_API_KEY: Boolean(process.env.OPENAI_API_KEY?.trim()),
     GEMINI_API_KEY: Boolean(process.env.GEMINI_API_KEY?.trim()),
     BLOB_STORAGE: Boolean(
-      process.env.BLOB_READ_WRITE_TOKEN?.trim() ||
-        (process.env.BLOB_STORE_ID?.trim() && process.env.BLOB_WEBHOOK_PUBLIC_KEY?.trim()),
+      process.env.BLOB_STORE_ID?.trim() &&
+        (process.env.VERCEL_OIDC_TOKEN?.trim() || process.env.BLOB_READ_WRITE_TOKEN?.trim()),
     ),
   };
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 const DRAFT_KEY = "family-studio-story-draft";
@@ -26,7 +27,10 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
     <main className="page-shell">
       <header className="studio-header">
         <div className="brand"><span className="brand-mark" aria-hidden="true">✦</span> Animation Studio</div>
-        <button className="quiet-button" type="button" onClick={logout}>나가기</button>
+        <div className="header-actions">
+          <Link className="quiet-button nav-link" href="/references">자료실</Link>
+          <button className="quiet-button" type="button" onClick={logout}>나가기</button>
+        </div>
       </header>
 
       <section className="studio-intro">
