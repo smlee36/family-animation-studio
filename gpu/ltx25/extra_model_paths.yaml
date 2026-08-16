@@ -1,0 +1,7 @@
+ltx25:
+  base_path: /NHNHOME/WORKSPACE/26mss002_U1A/ltx25/models/ltx-2.5
+  diffusion_models: diffusion_models
+  text_encoders: text_encoders
+  vae: vae
+  latent_upscale_models: latent_upscale_models
+  loras: loras

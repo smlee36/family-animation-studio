@@ -40,3 +40,9 @@ npm run lint
 npm run typecheck
 npm run build
 ```
+
+## B200 오픈 비디오 백엔드
+
+Gemini/Veo를 대체할 오픈 비디오 백엔드는 LTX-2.5를 기준으로 구축 중입니다.
+최종 모드는 Dev BF16 HQ 2단계 파이프라인, 초안 모드는 Distilled를 사용합니다.
+설치 상태와 품질 프리셋은 [`gpu/ltx25`](gpu/ltx25/README.md)에 기록합니다.

@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "status": "provisional-until-b200-ab-test",
+  "delivery": {
+    "reel": {
+      "generationWidth": 576,
+      "generationHeight": 1024,
+      "upscaledWidth": 1152,
+      "upscaledHeight": 2048,
+      "outputWidth": 1080,
+      "outputHeight": 1920,
+      "frameRate": 24,
+      "numFrames": 121
+    }
+  },
+  "presets": {
+    "gentle": {
+      "pipeline": "ti2vid_two_stages_hq",
+      "numInferenceSteps": 24,
+      "videoCfgGuidanceScale": 3.0,
+      "videoStgGuidanceScale": 0.5,
+      "videoRescaleScale": 0.55,
+      "startImageStrength": 1.0,
+      "description": "미소, 눈 깜빡임, 책장 넘기기처럼 작은 가족 동작"
+    },
+    "action": {
+      "pipeline": "ti2vid_two_stages_hq",
+      "numInferenceSteps": 30,
+      "videoCfgGuidanceScale": 3.5,
+      "videoStgGuidanceScale": 1.0,
+      "videoRescaleScale": 0.7,
+      "startImageStrength": 0.9,
+      "description": "걷기, 달리기, 물건 전달처럼 자세 변화가 큰 동작"
+    },
+    "camera": {
+      "pipeline": "ti2vid_two_stages_hq",
+      "numInferenceSteps": 30,
+      "videoCfgGuidanceScale": 3.0,
+      "videoStgGuidanceScale": 0.8,
+      "videoRescaleScale": 0.65,
+      "startImageStrength": 0.95,
+      "description": "느린 돌리, 팬, 줌 등 카메라 이동 중심 Shot"
+    }
+  }
+}
+
