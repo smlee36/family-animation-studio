@@ -29,7 +29,7 @@ def argv_for_job(job_id: str, offload_mode: str | None = None, segment_index: in
     job_root = ROOT / "jobs" / job_id
     job = json.loads((job_root / "job.json").read_text(encoding="utf-8"))
     input_filenames = job.get("input_filenames") or [job["input_filename"]]
-    connected = len(input_filenames) == 3
+    connected = len(input_filenames) > 1
     if segment_index != 0:
         raise ValueError("LTX jobs use one continuous timeline")
     preset = PRESETS[job["preset"]]
@@ -42,11 +42,12 @@ def argv_for_job(job_id: str, offload_mode: str | None = None, segment_index: in
     output_path = job_root / "output.mp4"
     image_args = ["--image", str(job_root / input_filenames[0]), "0", "1.0"]
     if connected:
-        image_args = [
-            "--image", str(job_root / input_filenames[0]), "0", "1.0",
-            "--image", str(job_root / input_filenames[1]), str((num_frames - 1) // 2), "1.0",
-            "--image", str(job_root / input_filenames[2]), str(num_frames - 1), "1.0",
-        ]
+        image_args = []
+        last_frame = num_frames - 1
+        intervals = len(input_filenames) - 1
+        for index, input_filename in enumerate(input_filenames):
+            frame_index = round(last_frame * index / intervals)
+            image_args.extend(["--image", str(job_root / input_filename), str(frame_index), "1.0"])
     return [
         "ltx_pipelines.ti2vid_two_stages_hq",
         "--transformer-path", str(MODEL_ROOT / "diffusion_models/ltx-2.5-22b-dev-transformer-bf16.safetensors"),

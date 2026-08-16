@@ -617,8 +617,8 @@ async def create_job(
         return job_with_progress(load_job(job_id))
 
     uploads = [image, *(keyframe_images or [])]
-    if len(uploads) not in {1, 3}:
-        raise HTTPException(status_code=400, detail="A connected video requires exactly three keyframes")
+    if not 1 <= len(uploads) <= 9:
+        raise HTTPException(status_code=400, detail="A video accepts between one and nine ordered keyframes")
     destination_dir = job_dir(job_id)
     destination_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
     input_filenames: list[str] = []
