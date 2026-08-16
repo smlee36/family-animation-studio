@@ -66,6 +66,21 @@ export default async function EpisodeDetailPage({ params }: { params: Promise<{ 
         <p>{episode.plan?.summary || episode.story}</p>
       </section>
 
+      {episode.finalVideo ? (
+        <section className={`saved-final-video ${episode.finalVideo.status}`} aria-labelledby="saved-final-video-title">
+          <div>
+            <div><p className="eyebrow">FINAL EPISODE</p><h2 id="saved-final-video-title">최종 영상</h2></div>
+            <span>{episode.finalVideo.status === "ready" ? "완성" : episode.finalVideo.status === "generating" ? "병합 중" : "확인 필요"}</span>
+          </div>
+          {episode.finalVideo.status === "ready" ? (
+            <>
+              <video className={episode.finalVideo.aspectRatio === "9:16" ? "portrait-video" : undefined} controls playsInline preload="metadata" src={`/api/episodes/${episode.id}/final-video/video`} />
+              <a className="primary-link" href={`/api/episodes/${episode.id}/final-video/video?download=1`}>최종 영상 다운로드</a>
+            </>
+          ) : <p>{episode.finalVideo.error || episode.finalVideo.backendStatus}</p>}
+        </section>
+      ) : null}
+
       {storyboardInputs.length ? (
         <section className="saved-storyboards" aria-labelledby="saved-storyboards-title">
           <h2 id="saved-storyboards-title">{hasPhotoInput && !hasStoryboardInput ? "영상 시작 사진" : hasPhotoInput ? "입력 이미지" : "입력 스토리보드"}</h2>

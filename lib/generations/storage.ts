@@ -21,6 +21,10 @@ export function generationSceneMasterFramePath(id: string) {
   return `generations/scene-master/${id}.jpg`;
 }
 
+export function episodeFinalVideoPath(episodeId: string, finalVideoId: string) {
+  return `episodes/final-videos/${episodeId}/${finalVideoId}.mp4`;
+}
+
 export async function getGeneration(id: string): Promise<ShotGenerationRecord | null> {
   const result = await get(generationMetadataPath(id), { access: "private", useCache: false });
   if (!result?.stream || result.statusCode !== 200) return null;

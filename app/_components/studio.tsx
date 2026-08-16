@@ -7,7 +7,7 @@ import { uploadPresigned } from "@vercel/blob/client";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { PhotoVideoForm } from "@/app/_components/photo-video-form";
 import type { DirectorPlan, DirectorReference } from "@/lib/director/types";
-import type { EpisodeFormat, EpisodeStudioState, SceneFrameRecord } from "@/lib/episodes/types";
+import type { EpisodeFormat, EpisodeStudioState, FinalVideoRecord, SceneFrameRecord } from "@/lib/episodes/types";
 import type { LtxPreset, LtxRenderMode, ShotGenerationView, VideoGenerationProvider } from "@/lib/generations/types";
 import type { StoryInputView } from "@/lib/story-inputs/types";
 
@@ -37,6 +37,12 @@ type GenerationApiResponse = {
 
 type SceneFrameApiResponse = {
   frame?: SceneFrameRecord;
+  error?: string;
+  requestId?: string;
+};
+
+type FinalVideoApiResponse = {
+  finalVideo?: FinalVideoRecord | null;
   error?: string;
   requestId?: string;
 };
@@ -316,6 +322,12 @@ export function Studio({
   const [ltxBatchMode, setLtxBatchMode] = useState<LtxBatchModeView | null>(null);
   const [ltxBatchPending, setLtxBatchPending] = useState(false);
   const [ltxBatchMessage, setLtxBatchMessage] = useState("");
+  const [bulkGenerationPending, setBulkGenerationPending] = useState(false);
+  const [bulkGenerationProgress, setBulkGenerationProgress] = useState({ completed: 0, total: 0, message: "" });
+  const bulkGenerationStopRef = useRef(false);
+  const [finalVideo, setFinalVideo] = useState<FinalVideoRecord | null>(initialEpisode?.episode.finalVideo || null);
+  const [finalVideoPending, setFinalVideoPending] = useState(false);
+  const [finalVideoMessage, setFinalVideoMessage] = useState("");
   const [openScenes, setOpenScenes] = useState<Set<string>>(
     new Set((() => {
       const scenes = initialEpisode?.episode.plan?.scenes || [];
@@ -364,6 +376,28 @@ export function Studio({
     }, 30_000);
     return () => window.clearInterval(interval);
   }, [ltxBatchMode?.enabled, ltxBatchMode?.state]);
+
+  useEffect(() => {
+    if (!episodeId || finalVideo?.status !== "generating") return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/episodes/${episodeId}/final-video`, { cache: "no-store" });
+        const body = (await response.json()) as FinalVideoApiResponse;
+        if (!response.ok) throw new Error(`${body.error || "최종 영상 상태를 확인하지 못했습니다."}${body.requestId ? ` (문의 번호: ${body.requestId})` : ""}`);
+        if (!cancelled && body.finalVideo) {
+          setFinalVideo(body.finalVideo);
+          if (body.finalVideo.status === "ready") setFinalVideoMessage("최종 영상이 완성되었습니다.");
+          if (body.finalVideo.status === "failed") setFinalVideoMessage(body.finalVideo.error || "최종 영상 병합에 실패했습니다.");
+        }
+      } catch (caught) {
+        if (!cancelled) setFinalVideoMessage(caught instanceof Error ? caught.message : "최종 영상 상태를 확인하지 못했습니다.");
+      }
+    };
+    void poll();
+    const interval = window.setInterval(() => void poll(), 10_000);
+    return () => { cancelled = true; window.clearInterval(interval); };
+  }, [episodeId, finalVideo?.status]);
 
   useEffect(() => () => {
     pendingStoryboardsRef.current.forEach((input) => URL.revokeObjectURL(input.previewUrl));
@@ -727,18 +761,22 @@ export function Studio({
     }
   }
 
-  async function generateShot(shot: DirectorPlan["scenes"][number]["shots"][number], ltxRenderMode: LtxRenderMode = "preview") {
+  async function generateShot(
+    shot: DirectorPlan["scenes"][number]["shots"][number],
+    ltxRenderMode: LtxRenderMode = "preview",
+    generationSnapshot: Record<string, ShotGenerationView> = generations,
+  ): Promise<ShotGenerationView | null> {
     const shotScene = plan?.scenes.find((scene) => scene.shots.some((item) => item.id === shot.id));
-    if (!shotScene) return;
-    const currentGeneration = generations[shot.id];
+    if (!shotScene) return null;
+    const currentGeneration = generationSnapshot[shot.id];
     const previousShot = previousShotInSameScene(shot.id);
-    const previousGeneration = previousShot ? generations[previousShot.id] : undefined;
+    const previousGeneration = previousShot ? generationSnapshot[previousShot.id] : undefined;
     let continuityFrame = "";
     let continuitySourceGenerationId = "";
     if (previousShot) {
       if (!previousGeneration || previousGeneration.status !== "ready" || !previousGeneration.videoUrl) {
         setQcMessages((current) => ({ ...current, [shot.id]: `연속 생성을 위해 앞 Shot ${previousShot.id} 영상을 먼저 완성해 주세요.` }));
-        return;
+        return null;
       }
       setQcMessages((current) => ({ ...current, [shot.id]: `앞 Shot ${previousShot.id}의 마지막 프레임을 연결하고 있어요…` }));
       try {
@@ -749,7 +787,7 @@ export function Studio({
           ...current,
           [shot.id]: caught instanceof Error ? caught.message : "이전 Shot의 마지막 프레임을 준비하지 못했습니다.",
         }));
-        return;
+        return null;
       }
     }
     rememberGenerationVersion(shot.id, generations[shot.id]);
@@ -818,6 +856,7 @@ export function Studio({
       if (generation.status === "ready" && (generation.provider !== "ltx" || generation.ltxRenderMode === "final")) {
         await runQcCycle(shot, generation);
       }
+      return generation;
     } catch (caught) {
       setGenerations((current) => ({
         ...current,
@@ -853,6 +892,7 @@ export function Studio({
           qc: current[shot.id]?.qc || null,
         },
       }));
+      return null;
     }
   }
 
@@ -971,11 +1011,97 @@ export function Studio({
     }
   }
 
+  async function enableLtxBatchForBulk() {
+    if (videoProvider !== "ltx" || ltxBatchMode?.enabled) return;
+    const response = await fetch("/api/system/ltx-batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+    });
+    const body = (await response.json()) as { batchMode?: LtxBatchModeView; error?: string; requestId?: string };
+    if (!response.ok || !body.batchMode) {
+      throw new Error(`${body.error || "고속 배치 모드를 준비하지 못했습니다."}${body.requestId ? ` (문의 번호: ${body.requestId})` : ""}`);
+    }
+    setLtxBatchMode(body.batchMode);
+  }
+
+  async function generateAllPreviews() {
+    if (!plan || bulkGenerationPending) return;
+    if (Object.values(generations).some((generation) => generation.status === "generating")) {
+      setBulkGenerationProgress({ completed: readyShotCount, total: orderedPlanShots.length, message: "현재 생성 중인 Shot이 끝나면 다시 눌러 이어서 만들어주세요." });
+      return;
+    }
+    const orderedShots = plan.scenes.flatMap((scene) => scene.shots);
+    const remainingShots = orderedShots.filter((shot) => generations[shot.id]?.status !== "ready");
+    if (!remainingShots.length) {
+      setBulkGenerationProgress({ completed: orderedShots.length, total: orderedShots.length, message: "모든 Shot 영상이 이미 준비되어 있습니다." });
+      return;
+    }
+    bulkGenerationStopRef.current = false;
+    setBulkGenerationPending(true);
+    setBulkGenerationProgress({ completed: orderedShots.length - remainingShots.length, total: orderedShots.length, message: "B200 고속 배치를 준비하고 있어요." });
+    const snapshot = { ...generations };
+    try {
+      await enableLtxBatchForBulk();
+      let completed = orderedShots.length - remainingShots.length;
+      for (const shot of orderedShots) {
+        if (bulkGenerationStopRef.current) {
+          setBulkGenerationProgress({ completed, total: orderedShots.length, message: "현재 Shot까지 저장하고 전체 생성을 멈췄습니다. 다시 누르면 이어서 생성합니다." });
+          break;
+        }
+        if (snapshot[shot.id]?.status === "ready") continue;
+        setBulkGenerationProgress({ completed, total: orderedShots.length, message: `Shot ${shot.id} 미리보기를 만들고 있어요.` });
+        const generation = await generateShot(shot, "preview", snapshot);
+        if (!generation || generation.status !== "ready") {
+          throw new Error(`Shot ${shot.id} 생성이 완료되지 않았습니다. 다시 누르면 이 Shot부터 이어서 생성합니다.`);
+        }
+        snapshot[shot.id] = generation;
+        completed += 1;
+        setBulkGenerationProgress({ completed, total: orderedShots.length, message: `${completed}/${orderedShots.length} Shot을 준비했습니다.` });
+      }
+      if (!bulkGenerationStopRef.current && completed === orderedShots.length) {
+        setBulkGenerationProgress({ completed, total: orderedShots.length, message: "전체 Shot 미리보기가 준비되었습니다. 확인 후 승인하거나 고화질로 바꿔주세요." });
+      }
+    } catch (caught) {
+      setBulkGenerationProgress((current) => ({ ...current, message: caught instanceof Error ? caught.message : "전체 Shot 생성 중 문제가 생겼습니다." }));
+    } finally {
+      setBulkGenerationPending(false);
+    }
+  }
+
+  async function createFinalVideo() {
+    if (!episodeId || finalVideoPending || finalVideo?.status === "generating") return;
+    setFinalVideoPending(true);
+    setFinalVideoMessage("");
+    try {
+      const response = await fetch(`/api/episodes/${episodeId}/final-video`, { method: "POST" });
+      const body = (await response.json()) as FinalVideoApiResponse;
+      if (!response.ok || !body.finalVideo) {
+        throw new Error(`${body.error || "최종 영상을 만들지 못했습니다."}${body.requestId ? ` (문의 번호: ${body.requestId})` : ""}`);
+      }
+      setFinalVideo(body.finalVideo);
+      setFinalVideoMessage("승인 영상을 Scene/Shot 순서대로 합치고 있어요.");
+    } catch (caught) {
+      setFinalVideoMessage(caught instanceof Error ? caught.message : "최종 영상을 만들지 못했습니다.");
+    } finally {
+      setFinalVideoPending(false);
+    }
+  }
+
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
     router.replace("/");
     router.refresh();
   }
+
+  const orderedPlanShots = plan?.scenes.flatMap((scene) => scene.shots) || [];
+  const readyShotCount = orderedPlanShots.filter((shot) => generations[shot.id]?.status === "ready").length;
+  const approvedShotCount = orderedPlanShots.filter((shot) => generations[shot.id]?.status === "ready" && generations[shot.id]?.approvalStatus === "approved").length;
+  const currentGenerationIds = orderedPlanShots.map((shot) => generations[shot.id]?.id || "").filter(Boolean);
+  const finalVideoIsStale = Boolean(finalVideo?.status === "ready" && (
+    finalVideo.shotGenerationIds.length !== currentGenerationIds.length ||
+    finalVideo.shotGenerationIds.some((id, index) => id !== currentGenerationIds[index])
+  ));
 
   return (
     <main className="page-shell studio-page">
@@ -1105,6 +1231,33 @@ export function Studio({
               {ltxBatchMessage ? <p className="ltx-batch-message">{ltxBatchMessage}</p> : null}
             </section>
           ) : null}
+
+          <section className="bulk-generation-panel" aria-live="polite">
+            <div>
+              <span className="eyebrow">ALL SHOTS</span>
+              <strong>전체 Shot 순서대로 만들기</strong>
+              <p>완료된 영상은 건너뛰고, 같은 Scene의 앞 영상 마지막 프레임을 이어서 미리보기를 만듭니다.</p>
+            </div>
+            <div className="bulk-generation-metrics">
+              <span><b>{readyShotCount}</b> / {orderedPlanShots.length} 준비</span>
+              <span><b>{approvedShotCount}</b> 승인</span>
+            </div>
+            {bulkGenerationProgress.total ? (
+              <div className="bulk-progress" role="status">
+                <span style={{ width: `${Math.round(100 * bulkGenerationProgress.completed / Math.max(1, bulkGenerationProgress.total))}%` }} />
+                <p>{bulkGenerationProgress.message}</p>
+              </div>
+            ) : null}
+            {bulkGenerationPending ? (
+              <button className="secondary-action" type="button" onClick={() => { bulkGenerationStopRef.current = true; }}>
+                현재 Shot 이후 멈추기
+              </button>
+            ) : (
+              <button className="primary-button" type="button" disabled={!orderedPlanShots.length || readyShotCount === orderedPlanShots.length || hasActiveLtxGeneration} onClick={() => void generateAllPreviews()}>
+                {readyShotCount ? "이어서 전체 미리보기 만들기" : "전체 미리보기 만들기"}
+              </button>
+            )}
+          </section>
 
           {format === "reels" ? (
             <section className="reels-frame-overview" aria-label="릴스 Scene 이미지 준비 상태">
@@ -1413,6 +1566,29 @@ export function Studio({
               </details>
             ))}
           </div>
+
+          <section className={`final-video-panel${finalVideo?.status === "ready" ? " ready" : ""}`} aria-live="polite">
+            <div className="final-video-heading">
+              <div><span className="eyebrow">FINAL EPISODE</span><h3>최종 영상 만들기</h3></div>
+              <span>{approvedShotCount}/{orderedPlanShots.length} 승인</span>
+            </div>
+            <p>모든 승인 영상을 Scene과 Shot 순서대로 하드컷으로 합쳐 하나의 MP4로 저장합니다.</p>
+            {finalVideo?.status === "ready" && !finalVideoIsStale ? (
+              <div className="final-video-result">
+                <video className={finalVideo.aspectRatio === "9:16" ? "portrait-video" : undefined} controls playsInline preload="metadata" src={`/api/episodes/${episodeId}/final-video/video`} />
+                <a className="primary-link" href={`/api/episodes/${episodeId}/final-video/video?download=1`}>최종 영상 다운로드</a>
+              </div>
+            ) : null}
+            {finalVideoIsStale ? <p className="feedback compact-feedback">Shot 영상이 변경되어 최종 영상을 다시 만들어야 합니다.</p> : null}
+            {finalVideo?.status === "generating" ? <p className="phase-note"><span className="button-spinner" aria-hidden="true" />{finalVideo.backendStatus || "B200에서 영상을 합치고 있어요."}</p> : null}
+            {finalVideoMessage ? <p className={finalVideo?.status === "failed" ? "feedback compact-feedback" : "generation-note"}>{finalVideoMessage}</p> : null}
+            {finalVideo?.status !== "generating" ? (
+              <button className="primary-button" type="button" disabled={finalVideoPending || !orderedPlanShots.length || approvedShotCount !== orderedPlanShots.length} onClick={() => void createFinalVideo()}>
+                {finalVideoPending ? "병합 준비 중…" : finalVideo?.status === "ready" ? "최종 영상 다시 만들기" : "최종 영상 만들기"}
+              </button>
+            ) : null}
+            {approvedShotCount !== orderedPlanShots.length ? <small>모든 Shot을 확인하고 승인하면 버튼이 활성화됩니다.</small> : null}
+          </section>
         </section>
       ) : null}
 

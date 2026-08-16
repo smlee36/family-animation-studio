@@ -2,7 +2,7 @@ import "server-only";
 
 import { get, list, put } from "@vercel/blob";
 import type { DirectorPlan } from "@/lib/director/types";
-import { isEpisodeRecord, type EpisodeFormat, type EpisodeRecord, type SceneFrameRecord } from "@/lib/episodes/types";
+import { isEpisodeRecord, type EpisodeFormat, type EpisodeRecord, type FinalVideoRecord, type SceneFrameRecord } from "@/lib/episodes/types";
 
 const METADATA_PREFIX = "episodes/meta/";
 
@@ -130,6 +130,18 @@ export async function linkGenerationToEpisode(episodeId: string, shotId: string,
     ...current,
     generationIdsByShot: { ...current.generationIdsByShot, [shotId]: generationId },
     generationHistoryIdsByShot: { ...current.generationHistoryIdsByShot, [shotId]: generationHistory },
+    updatedAt: new Date().toISOString(),
+  };
+  await saveEpisode(updated);
+  return updated;
+}
+
+export async function saveEpisodeFinalVideo(episodeId: string, finalVideo: FinalVideoRecord) {
+  const current = await getEpisode(episodeId);
+  if (!current) return null;
+  const updated: EpisodeRecord = {
+    ...current,
+    finalVideo,
     updatedAt: new Date().toISOString(),
   };
   await saveEpisode(updated);

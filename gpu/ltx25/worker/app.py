@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +23,7 @@ from fastapi.responses import FileResponse
 
 ROOT = Path(os.environ.get("LTX25_ROOT", "/NHNHOME/WORKSPACE/26mss002_U1A/ltx25"))
 JOBS_ROOT = ROOT / "jobs"
+MERGES_ROOT = ROOT / "merges"
 LTX_ROOT = ROOT / "LTX-2"
 PYTHON = LTX_ROOT / ".venv" / "bin" / "python"
 RUNNER = ROOT / "project-config" / "worker" / "run_job.py"
@@ -34,6 +36,8 @@ AX_SERVE_SCRIPT = AX_ROOT / "serve_current.sh"
 AX_TOKEN_FILE = AX_ROOT / ".tn_token"
 TOKEN_FILE = Path(os.environ.get("LTX_API_TOKEN_FILE", str(ROOT / ".ltx_api_token")))
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
+MAX_MERGE_CLIP_BYTES = 250 * 1024 * 1024
+MAX_MERGE_CLIPS = 100
 JOB_ID_PATTERN = re.compile(r"^[0-9a-f-]{36}$", re.IGNORECASE)
 
 PRESETS = {
@@ -44,6 +48,7 @@ PRESETS = {
 
 app = FastAPI(title="Family Animation LTX-2.5 Worker", docs_url=None, redoc_url=None)
 job_queue: queue.Queue[str] = queue.Queue()
+merge_queue: queue.Queue[str] = queue.Queue()
 worker_started = False
 worker_lock = threading.Lock()
 batch_lock = threading.Lock()
@@ -60,6 +65,30 @@ def job_dir(job_id: str) -> Path:
 
 def metadata_path(job_id: str) -> Path:
     return job_dir(job_id) / "job.json"
+
+
+def merge_dir(merge_id: str) -> Path:
+    return MERGES_ROOT / merge_id
+
+
+def merge_metadata_path(merge_id: str) -> Path:
+    return merge_dir(merge_id) / "merge.json"
+
+
+def load_merge(merge_id: str) -> dict:
+    path = merge_metadata_path(merge_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Merge job not found")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def save_merge(job: dict) -> None:
+    path = merge_metadata_path(job["id"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.chmod(0o600)
+    os.replace(temporary, path)
 
 
 def load_job(job_id: str) -> dict:
@@ -346,6 +375,120 @@ def worker_loop() -> None:
             job_queue.task_done()
 
 
+def download_merge_clip(url: str, destination: Path) -> None:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname or not parsed.hostname.endswith(".blob.vercel-storage.com"):
+        raise RuntimeError("Merge clip URL is not an approved Vercel Blob URL")
+    request = urllib.request.Request(url, headers={"User-Agent": "family-animation-studio-b200/1.0"})
+    size = 0
+    with urllib.request.urlopen(request, timeout=120) as response, destination.open("wb") as output:
+        while True:
+            chunk = response.read(1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > MAX_MERGE_CLIP_BYTES:
+                raise RuntimeError("A merge clip exceeds the 250MB limit")
+            output.write(chunk)
+    if size == 0:
+        raise RuntimeError("A merge clip was empty")
+    destination.chmod(0o600)
+
+
+def clip_has_audio(path: Path) -> bool:
+    result = subprocess.run(
+        ["/usr/bin/ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=index", "-of", "csv=p=0", str(path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        text=True,
+    )
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def normalize_merge_clip(source: Path, destination: Path, width: int, height: int, log_file) -> None:
+    video_filter = f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=24"
+    audio_input = [] if clip_has_audio(source) else ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
+    audio_map = ["-map", "0:v:0", "-map", "0:a:0?"] if not audio_input else ["-map", "0:v:0", "-map", "1:a:0", "-shortest"]
+    common = [
+        "/usr/bin/ffmpeg", "-y", "-hide_banner", "-i", str(source), *audio_input,
+        *audio_map, "-vf", video_filter, "-af", "aresample=48000", "-ar", "48000", "-ac", "2",
+        "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
+    ]
+    hardware = subprocess.run(
+        [*common, "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "20", "-pix_fmt", "yuv420p", str(destination)],
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    if hardware.returncode == 0 and destination.is_file() and destination.stat().st_size:
+        return
+    destination.unlink(missing_ok=True)
+    software = subprocess.run(
+        [*common, "-c:v", "libx264", "-preset", "veryfast", "-crf", "19", "-pix_fmt", "yuv420p", str(destination)],
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    if software.returncode != 0 or not destination.is_file() or destination.stat().st_size == 0:
+        raise RuntimeError("FFmpeg could not normalize a merge clip")
+
+
+def run_merge(merge_id: str) -> None:
+    job = load_merge(merge_id)
+    job.update(status="running", stage="승인 영상을 내려받는 중", started_at=now_iso(), updated_at=now_iso())
+    save_merge(job)
+    directory = merge_dir(merge_id)
+    log_path = directory / "merge.log"
+    try:
+        width, height = (1920, 1080) if job["aspect_ratio"] == "16:9" else (1080, 1920)
+        normalized_paths: list[Path] = []
+        with log_path.open("wb") as log_file:
+            for index, clip in enumerate(job["clips"]):
+                job.update(stage=f"영상 준비 중 {index + 1}/{len(job['clips'])}", updated_at=now_iso())
+                save_merge(job)
+                source = directory / f"source-{index:03d}.mp4"
+                normalized = directory / f"normalized-{index:03d}.mp4"
+                download_merge_clip(clip["url"], source)
+                normalize_merge_clip(source, normalized, width, height, log_file)
+                source.unlink(missing_ok=True)
+                normalized_paths.append(normalized)
+
+            concat_path = directory / "concat.txt"
+            concat_path.write_text("".join(f"file '{path.name}'\n" for path in normalized_paths), encoding="utf-8")
+            concat_path.chmod(0o600)
+            job.update(stage="최종 MP4로 합치는 중", updated_at=now_iso())
+            save_merge(job)
+            output_path = directory / "output.mp4"
+            result = subprocess.run(
+                ["/usr/bin/ffmpeg", "-y", "-hide_banner", "-f", "concat", "-safe", "0", "-i", str(concat_path), "-c", "copy", "-movflags", "+faststart", str(output_path)],
+                cwd=directory,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+        if result.returncode != 0 or not output_path.is_file() or output_path.stat().st_size == 0:
+            raise RuntimeError(error_tail(log_path))
+        probe = subprocess.run(
+            ["/usr/bin/ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(output_path)],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, check=False,
+        )
+        duration_seconds = round(float(probe.stdout.strip()), 3) if probe.returncode == 0 and probe.stdout.strip() else 0
+        job.update(status="succeeded", stage="완료", output_bytes=output_path.stat().st_size, duration_seconds=duration_seconds, completed_at=now_iso(), updated_at=now_iso(), error="")
+    except Exception as error:
+        job.update(status="failed", stage="최종 영상 병합 실패", completed_at=now_iso(), updated_at=now_iso(), error=str(error)[-4000:])
+    save_merge(job)
+
+
+def merge_worker_loop() -> None:
+    while True:
+        merge_id = merge_queue.get()
+        try:
+            run_merge(merge_id)
+        finally:
+            merge_queue.task_done()
+
+
 def batch_idle_monitor() -> None:
     while True:
         time.sleep(30)
@@ -363,6 +506,7 @@ def start_worker() -> None:
         if worker_started:
             return
         JOBS_ROOT.mkdir(parents=True, exist_ok=True)
+        MERGES_ROOT.mkdir(parents=True, exist_ok=True)
         state = load_batch_state()
         if state["enabled"]:
             try:
@@ -373,6 +517,7 @@ def start_worker() -> None:
             save_batch_state(state)
         thread = threading.Thread(target=worker_loop, name="ltx25-worker", daemon=True)
         thread.start()
+        threading.Thread(target=merge_worker_loop, name="ltx25-merge-worker", daemon=True).start()
         threading.Thread(target=batch_idle_monitor, name="ltx25-batch-monitor", daemon=True).start()
         worker_started = True
         for path in sorted(JOBS_ROOT.glob("*/job.json")):
@@ -382,6 +527,15 @@ def start_worker() -> None:
                     job.update(status="queued", stage="재시작 후 대기 중", updated_at=now_iso())
                     save_job(job)
                     job_queue.put(job["id"])
+            except Exception:
+                continue
+        for path in sorted(MERGES_ROOT.glob("*/merge.json")):
+            try:
+                merge_job = json.loads(path.read_text(encoding="utf-8"))
+                if merge_job.get("status") in {"queued", "running"}:
+                    merge_job.update(status="queued", stage="재시작 후 병합 대기 중", updated_at=now_iso())
+                    save_merge(merge_job)
+                    merge_queue.put(merge_job["id"])
             except Exception:
                 continue
 
@@ -525,3 +679,65 @@ def get_video(job_id: str) -> FileResponse:
     if job.get("status") != "succeeded" or not output_path.is_file():
         raise HTTPException(status_code=409, detail="Video is not ready")
     return FileResponse(output_path, media_type="video/mp4", filename=f"{job_id}.mp4")
+
+
+@app.post("/ltx/merges", status_code=202, dependencies=[Depends(require_token)])
+def create_merge(payload: dict = Body(...)) -> dict:
+    merge_id = str(payload.get("merge_id") or "")
+    clips = payload.get("clips")
+    aspect_ratio = payload.get("aspect_ratio")
+    transition = payload.get("transition")
+    if not JOB_ID_PATTERN.fullmatch(merge_id):
+        raise HTTPException(status_code=400, detail="Invalid merge id")
+    if not isinstance(clips, list) or not 1 <= len(clips) <= MAX_MERGE_CLIPS:
+        raise HTTPException(status_code=400, detail="A merge requires between 1 and 100 clips")
+    if aspect_ratio not in {"16:9", "9:16"} or transition != "hard_cut":
+        raise HTTPException(status_code=400, detail="Invalid merge format")
+    normalized_clips = []
+    for clip in clips:
+        if not isinstance(clip, dict) or not isinstance(clip.get("url"), str) or not isinstance(clip.get("generation_id"), str):
+            raise HTTPException(status_code=400, detail="Invalid merge clip")
+        parsed = urllib.parse.urlparse(clip["url"])
+        if parsed.scheme != "https" or not parsed.hostname or not parsed.hostname.endswith(".blob.vercel-storage.com"):
+            raise HTTPException(status_code=400, detail="Invalid merge clip URL")
+        normalized_clips.append({"url": clip["url"], "generation_id": clip["generation_id"]})
+    existing = merge_metadata_path(merge_id)
+    if existing.is_file():
+        return load_merge(merge_id)
+    directory = merge_dir(merge_id)
+    directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+    timestamp = now_iso()
+    job = {
+        "id": merge_id,
+        "status": "queued",
+        "stage": "최종 영상 병합 대기 중",
+        "clips": normalized_clips,
+        "aspect_ratio": aspect_ratio,
+        "transition": transition,
+        "output_bytes": 0,
+        "duration_seconds": 0,
+        "error": "",
+        "created_at": timestamp,
+        "updated_at": timestamp,
+        "started_at": "",
+        "completed_at": "",
+    }
+    save_merge(job)
+    merge_queue.put(merge_id)
+    return job
+
+
+@app.get("/ltx/merges/{merge_id}", dependencies=[Depends(require_token)])
+def get_merge(merge_id: str) -> dict:
+    if not JOB_ID_PATTERN.fullmatch(merge_id):
+        raise HTTPException(status_code=400, detail="Invalid merge id")
+    return load_merge(merge_id)
+
+
+@app.get("/ltx/merges/{merge_id}/video", dependencies=[Depends(require_token)])
+def get_merged_video(merge_id: str) -> FileResponse:
+    job = load_merge(merge_id)
+    output_path = merge_dir(merge_id) / "output.mp4"
+    if job.get("status") != "succeeded" or not output_path.is_file():
+        raise HTTPException(status_code=409, detail="Merged video is not ready")
+    return FileResponse(output_path, media_type="video/mp4", filename=f"family-episode-{merge_id}.mp4")

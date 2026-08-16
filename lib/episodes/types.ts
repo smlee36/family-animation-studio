@@ -5,6 +5,22 @@ import type { StoryInputView } from "@/lib/story-inputs/types";
 export type EpisodeStatus = "planning" | "ready" | "failed";
 export type EpisodeFormat = "landscape" | "reels";
 export type SceneFrameApprovalStatus = "pending" | "approved";
+export type FinalVideoStatus = "idle" | "generating" | "ready" | "failed";
+
+export type FinalVideoRecord = {
+  id: string;
+  status: FinalVideoStatus;
+  operationName: string;
+  videoPathname: string;
+  shotGenerationIds: string[];
+  durationSeconds: number;
+  aspectRatio: "16:9" | "9:16";
+  transition: "hard_cut";
+  backendStatus: string;
+  error: string;
+  createdAt: string;
+  updatedAt: string;
+};
 
 export type SceneFrameRecord = {
   id: string;
@@ -34,6 +50,7 @@ export type EpisodeRecord = {
   generationIdsByShot: Record<string, string>;
   generationHistoryIdsByShot?: Record<string, string[]>;
   sceneFrames?: Record<string, SceneFrameRecord>;
+  finalVideo?: FinalVideoRecord;
   error: string;
   createdAt: string;
   updatedAt: string;
@@ -73,7 +90,21 @@ export function isEpisodeRecord(value: unknown): value is EpisodeRecord {
           (value.approvalStatus === "pending" || value.approvalStatus === "approved") && typeof value.error === "string" &&
           typeof value.createdAt === "string" && typeof value.updatedAt === "string";
       }))) &&
+    (record.finalVideo === undefined || isFinalVideoRecord(record.finalVideo)) &&
     typeof record.error === "string" &&
     typeof record.createdAt === "string" &&
     typeof record.updatedAt === "string";
+}
+
+function isFinalVideoRecord(value: unknown): value is FinalVideoRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<FinalVideoRecord>;
+  return typeof record.id === "string" &&
+    (record.status === "idle" || record.status === "generating" || record.status === "ready" || record.status === "failed") &&
+    typeof record.operationName === "string" && typeof record.videoPathname === "string" &&
+    Array.isArray(record.shotGenerationIds) && record.shotGenerationIds.every((id) => typeof id === "string") &&
+    typeof record.durationSeconds === "number" && Number.isFinite(record.durationSeconds) && record.durationSeconds >= 0 &&
+    (record.aspectRatio === "16:9" || record.aspectRatio === "9:16") && record.transition === "hard_cut" &&
+    typeof record.backendStatus === "string" && typeof record.error === "string" &&
+    typeof record.createdAt === "string" && typeof record.updatedAt === "string";
 }

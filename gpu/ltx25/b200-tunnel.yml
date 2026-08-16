@@ -1,5 +1,6 @@
 tunnel: 9ab51b95-94ff-4245-8e33-0728a5d5d40f
 credentials-file: /NHNHOME/WORKSPACE/26mss002_U1A/9ab51b95-94ff-4245-8e33-0728a5d5d40f.json
+protocol: http2
 ingress:
   - hostname: b200-llm-node.technode.network
     path: ^/ltx/.*
