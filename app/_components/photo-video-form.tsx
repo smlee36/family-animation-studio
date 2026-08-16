@@ -141,7 +141,7 @@ export function PhotoVideoForm() {
       <div className="photo-video-heading">
         <span className="eyebrow">PHOTO TO VIDEO</span>
         <h2>사진 여러 장을 바로 영상으로</h2>
-        <p>사진 3장은 하나의 10초 연결 영상으로 만들 수 있고, 그 외에는 사진마다 별도 LTX 영상으로 저장합니다.</p>
+        <p>사진 3장은 각 장면을 따로 움직인 뒤 자연스럽게 연결한 10초 영상으로 만들 수 있고, 그 외에는 사진마다 별도 LTX 영상으로 저장합니다.</p>
       </div>
 
       {photos.length ? (
@@ -191,7 +191,7 @@ export function PhotoVideoForm() {
           <legend>사진 3장 만들기 방식</legend>
           <label className={connectPhotos ? "selected" : ""}>
             <input type="radio" name="photo-sequence-mode" checked={connectPhotos} onChange={() => { setConnectPhotos(true); setDurationSeconds(10); }} />
-            <span><strong>10초 연결 영상 한 편</strong><small>1→2, 2→3을 각 5초로 만들고 자동 연결</small></span>
+            <span><strong>10초 연결 영상 한 편</strong><small>세 장면을 따로 움직인 뒤 짧은 카메라 전환으로 자동 연결</small></span>
           </label>
           <label className={!connectPhotos ? "selected" : ""}>
             <input type="radio" name="photo-sequence-mode" checked={!connectPhotos} onChange={() => setConnectPhotos(false)} />
@@ -213,7 +213,7 @@ export function PhotoVideoForm() {
       </fieldset>
 
       {connectPhotos ? (
-        <div className="photo-connected-duration"><strong>최종 길이 10초</strong><small>사진 1→2 약 5초 + 사진 2→3 약 5초</small></div>
+        <div className="photo-connected-duration"><strong>최종 길이 10초</strong><small>장면별 LTX 생성 + 0.3초 무잔상 전환</small></div>
       ) : (
         <fieldset className="photo-duration-selector" disabled={pending}>
           <legend>영상 길이</legend>

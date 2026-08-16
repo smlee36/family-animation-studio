@@ -3,6 +3,7 @@ export type VeoQualityTier = "fast" | "standard";
 export type VideoGenerationProvider = "google" | "ltx";
 export type LtxPreset = "gentle" | "action" | "camera";
 export type LtxRenderMode = "preview" | "final";
+export type LtxSequenceMode = "timeline" | "montage";
 export type LtxDurationSeconds = 5 | 10;
 export type VideoDurationSeconds = 4 | 5 | 6 | 8 | 10;
 export type ShotApprovalStatus = "pending" | "approved" | "needs_review";

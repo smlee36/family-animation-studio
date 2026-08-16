@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import runpy
+import subprocess
 import sys
 from pathlib import Path
 
@@ -18,10 +19,13 @@ PRESETS = {
 
 
 def job_segment_count(job_id: str) -> int:
-    # Three-photo stories are generated in one diffusion timeline. Running two
-    # independent five-second jobs and concatenating them makes motion reset at
-    # the middle keyframe, which is visible as a cut even when the boundary
-    # frames themselves match.
+    job_root = ROOT / "jobs" / job_id
+    job = json.loads((job_root / "job.json").read_text(encoding="utf-8"))
+    input_filenames = job.get("input_filenames") or [job["input_filename"]]
+    if job.get("sequence_mode") == "montage":
+        if len(input_filenames) != 3:
+            raise ValueError("Montage mode requires exactly three ordered images")
+        return len(input_filenames)
     return 1
 
 
@@ -29,8 +33,9 @@ def argv_for_job(job_id: str, offload_mode: str | None = None, segment_index: in
     job_root = ROOT / "jobs" / job_id
     job = json.loads((job_root / "job.json").read_text(encoding="utf-8"))
     input_filenames = job.get("input_filenames") or [job["input_filename"]]
+    montage = job.get("sequence_mode") == "montage"
     connected = len(input_filenames) > 1
-    if segment_index != 0:
+    if not montage and segment_index != 0:
         raise ValueError("LTX jobs use one continuous timeline")
     preset = PRESETS[job["preset"]]
     preview = job.get("render_mode", "final") == "preview"
@@ -38,10 +43,13 @@ def argv_for_job(job_id: str, offload_mode: str | None = None, segment_index: in
         width, height = (448, 768) if job["aspect_ratio"] == "9:16" else (768, 448)
     else:
         width, height = (576, 1024) if job["aspect_ratio"] == "9:16" else (1280, 704)
-    num_frames = job["duration_seconds"] * 24 + 1
-    output_path = job_root / "output.mp4"
+    segment_duration = 5 if montage else job["duration_seconds"]
+    num_frames = segment_duration * 24 + 1
+    output_path = job_root / (f"segment-{segment_index:02d}.mp4" if montage else "output.mp4")
     image_args = ["--image", str(job_root / input_filenames[0]), "0", "1.0"]
-    if connected:
+    if montage:
+        image_args = ["--image", str(job_root / input_filenames[segment_index]), "0", "1.0"]
+    elif connected:
         image_args = []
         last_frame = num_frames - 1
         intervals = len(input_filenames) - 1
@@ -73,9 +81,34 @@ def argv_for_job(job_id: str, offload_mode: str | None = None, segment_index: in
 
 
 def finalize_segments(job_id: str) -> None:
-    # Stable hook retained for the resident runner. Connected jobs now write
-    # output.mp4 directly from one continuous generation.
-    return
+    job_root = ROOT / "jobs" / job_id
+    job = json.loads((job_root / "job.json").read_text(encoding="utf-8"))
+    if job.get("sequence_mode") != "montage":
+        return
+
+    inputs = [job_root / f"segment-{index:02d}.mp4" for index in range(3)]
+    if any(not path.is_file() or path.stat().st_size == 0 for path in inputs):
+        raise RuntimeError("A montage segment is missing")
+    output_path = job_root / "output.mp4"
+    filter_graph = (
+        "[0:v]trim=0:4.2,setpts=PTS-STARTPTS,fps=24,format=yuv420p[v0];"
+        "[1:v]trim=0:3.2,setpts=PTS-STARTPTS,fps=24,format=yuv420p[v1];"
+        "[2:v]trim=0:3.2,setpts=PTS-STARTPTS,fps=24,format=yuv420p[v2];"
+        "[v0][v1]xfade=transition=wipeleft:duration=0.30:offset=3.90[x1];"
+        "[x1][v2]xfade=transition=wipeleft:duration=0.30:offset=6.80[v]"
+    )
+    command = [
+        "/usr/bin/ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
+        "-i", str(inputs[0]), "-i", str(inputs[1]), "-i", str(inputs[2]),
+        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+        "-filter_complex", filter_graph, "-map", "[v]", "-map", "3:a",
+        "-c:v", "libx264", "-preset", "slow", "-crf", "17", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "128k", "-t", "10.0", "-movflags", "+faststart",
+        str(output_path),
+    ]
+    result = subprocess.run(command, check=False)
+    if result.returncode != 0 or not output_path.is_file() or output_path.stat().st_size == 0:
+        raise RuntimeError(f"FFmpeg montage failed with exit code {result.returncode}")
 
 
 def main() -> None:

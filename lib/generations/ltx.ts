@@ -13,6 +13,7 @@ import type {
   LtxPreset,
   LtxDurationSeconds,
   LtxRenderMode,
+  LtxSequenceMode,
   ShotGenerationRecord,
   VideoAspectRatio,
 } from "@/lib/generations/types";
@@ -182,6 +183,7 @@ export async function startLtxGeneration(input: {
   aspectRatio?: VideoAspectRatio;
   ltxPreset?: LtxPreset;
   ltxRenderMode?: LtxRenderMode;
+  ltxSequenceMode?: LtxSequenceMode;
 }) {
   const aspectRatio = input.aspectRatio || "16:9";
   const durationSeconds = duration(input.estimatedSeconds);
@@ -254,6 +256,7 @@ export async function startLtxGeneration(input: {
     form.set("prompt", record.prompt);
     form.set("preset", record.ltxPreset || "gentle");
     form.set("render_mode", record.ltxRenderMode || "preview");
+    form.set("sequence_mode", input.ltxSequenceMode || "timeline");
     form.set("aspect_ratio", aspectRatio);
     form.set("duration_seconds", String(durationSeconds));
     form.set("seed", "42");

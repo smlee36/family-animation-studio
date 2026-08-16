@@ -32,8 +32,8 @@ function buildPrompt(instruction: string) {
 function buildConnectedPrompt(instruction: string) {
   const motion = instruction || "가족이 첫 장면의 자세에서 다음 장면으로 자연스럽게 움직이며 침실에서 거실로 함께 걸어간다.";
   return [
-    "Create a smooth 5-second motion segment between the supplied starting and ending keyframes. This segment belongs to one continuous 10-second Korean family watercolor storybook animation made from three ordered keyframes.",
-    "Match the first and final frame of this segment exactly to the supplied keyframes.",
+    "Create three short consecutive shots for one 10-second Korean family watercolor storybook animation.",
+    "Use each uploaded photo as the exact first frame and visual source of truth for its corresponding shot. The shots will be edited in the uploaded order.",
     "Preserve the same father and child identities, faces, hairstyles, ages, body proportions, clothing, illustration texture, and the same large brown teddy bear across the entire sequence.",
     "Animate this action with physically natural, gentle movement:",
     motion,
@@ -163,6 +163,7 @@ export async function POST(request: NextRequest) {
           provider: "ltx",
           ltxPreset: connectPhotos ? "action" : presetForInstruction(instruction),
           ltxRenderMode: renderMode,
+          ltxSequenceMode: connectPhotos ? "montage" : "timeline",
           aspectRatio: format === "reels" ? "9:16" : "16:9",
           continuityFrame: {
             sourceGenerationId: "",
