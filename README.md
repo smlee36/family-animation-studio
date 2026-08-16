@@ -6,7 +6,8 @@
 
 - Phase 1: Next.js App Router 구조, 가족 비밀번호 인증, 서버 환경변수 확인, 모바일 우선 Story 입력 UI
 - Phase 2: Private Vercel Blob 기반 공동 Master Reference Library, 다중 업로드, 카테고리, 교체/삭제, 인증 이미지 스트리밍
-- Phase 3 이후: GPT Director, Veo 생성/QC, Episode 및 최종 영상
+- Phase 3: OpenAI Responses API 기반 `Story → Scene → Shot` Director, Storyboard 참고, Reference 자동 선택, Scene accordion 및 프롬프트 수정
+- Phase 4 이후: Veo 생성/QC, Episode 및 최종 영상
 
 ## 로컬 실행
 
@@ -22,6 +23,7 @@
 - `OPENAI_API_KEY`
 - `GEMINI_API_KEY`
 - `BLOB_READ_WRITE_TOKEN` (Phase 2, Vercel Blob 연결 시 자동 제공)
+- `OPENAI_DIRECTOR_MODEL` (선택, 기본값 `gpt-5.6-terra`)
 
 현재 Vercel 연결은 `BLOB_STORE_ID`와 Vercel OIDC를 사용합니다. Private Blob OIDC가 Preview/Production에만 연결된 경우 로컬 Development에서는 Blob API 대신 Preview 배포에서 통합 테스트합니다.
 
