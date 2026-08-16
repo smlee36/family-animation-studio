@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useMemo, useState } from "react";
 import type { DirectorPlan, DirectorReference } from "@/lib/director/types";
+import type { ShotGenerationView } from "@/lib/generations/types";
 
 const DRAFT_KEY = "family-studio-story-draft";
 
@@ -28,6 +29,8 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
   const [references, setReferences] = useState<DirectorReference[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const [generations, setGenerations] = useState<Record<string, ShotGenerationView>>({});
+  const [openScenes, setOpenScenes] = useState<Set<string>>(new Set());
   const referenceById = useMemo(() => new Map(references.map((reference) => [reference.id, reference])), [references]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -54,6 +57,7 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
       }
       setPlan(body.plan);
       setReferences(body.references || []);
+      setOpenScenes(new Set(body.plan.scenes[0] ? [body.plan.scenes[0].id] : []));
       sessionStorage.removeItem(DRAFT_KEY);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "이야기를 구성하지 못했습니다. 잠시 후 다시 시도해 주세요.");
@@ -70,6 +74,72 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
         shots: scene.shots.map((shot) => shot.id === shotId ? { ...shot, prompt } : shot),
       }),
     }));
+  }
+
+  async function generateShot(shot: DirectorPlan["scenes"][number]["shots"][number]) {
+    setGenerations((current) => ({
+      ...current,
+      [shot.id]: {
+        id: "",
+        shotId: shot.id,
+        status: "generating",
+        durationSeconds: 6,
+        usedReferenceIds: [],
+        omittedReferenceIds: [],
+        error: "",
+        createdAt: "",
+        updatedAt: "",
+        videoUrl: "",
+      },
+    }));
+
+    try {
+      const startResponse = await fetch("/api/shots/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shotId: shot.id,
+          prompt: shot.prompt,
+          estimatedSeconds: shot.estimatedSeconds,
+          referenceIds: shot.referenceIds,
+        }),
+      });
+      const startBody = (await startResponse.json()) as { generation?: ShotGenerationView; error?: string; requestId?: string };
+      if (!startResponse.ok || !startBody.generation) {
+        throw new Error(`${startBody.error || "영상 생성을 시작하지 못했습니다."}${startBody.requestId ? ` (문의 번호: ${startBody.requestId})` : ""}`);
+      }
+
+      let generation = startBody.generation;
+      setGenerations((current) => ({ ...current, [shot.id]: generation }));
+      for (let attempt = 0; attempt < 40 && generation.status === "generating"; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 10_000));
+        const pollResponse = await fetch(`/api/shots/generate/${generation.id}`, { cache: "no-store" });
+        const pollBody = (await pollResponse.json()) as { generation?: ShotGenerationView; error?: string; requestId?: string };
+        if (!pollResponse.ok || !pollBody.generation) {
+          throw new Error(`${pollBody.error || "영상 생성 상태를 확인하지 못했습니다."}${pollBody.requestId ? ` (문의 번호: ${pollBody.requestId})` : ""}`);
+        }
+        generation = pollBody.generation;
+        setGenerations((current) => ({ ...current, [shot.id]: generation }));
+      }
+      if (generation.status === "generating") throw new Error("영상 생성이 오래 걸리고 있습니다. 잠시 후 다시 시도해 주세요.");
+    } catch (caught) {
+      setGenerations((current) => ({
+        ...current,
+        [shot.id]: {
+          ...(current[shot.id] || {}),
+          id: current[shot.id]?.id || "",
+          shotId: shot.id,
+          status: "failed",
+          durationSeconds: current[shot.id]?.durationSeconds || 6,
+          usedReferenceIds: current[shot.id]?.usedReferenceIds || [],
+          omittedReferenceIds: current[shot.id]?.omittedReferenceIds || [],
+          error: caught instanceof Error ? caught.message : "영상 생성 중 문제가 생겼습니다.",
+          createdAt: current[shot.id]?.createdAt || "",
+          updatedAt: new Date().toISOString(),
+          videoUrl: "",
+        },
+      }));
+    }
   }
 
   async function logout() {
@@ -131,8 +201,21 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
           </div>
 
           <div className="scene-list">
-            {plan.scenes.map((scene, sceneIndex) => (
-              <details className="scene-accordion" key={scene.id} open={sceneIndex === 0}>
+            {plan.scenes.map((scene) => (
+              <details
+                className="scene-accordion"
+                key={scene.id}
+                open={openScenes.has(scene.id)}
+                onToggle={(event) => {
+                  const isOpen = event.currentTarget.open;
+                  setOpenScenes((current) => {
+                    const next = new Set(current);
+                    if (isOpen) next.add(scene.id);
+                    else next.delete(scene.id);
+                    return next;
+                  });
+                }}
+              >
                 <summary>
                   <span className="scene-number">SCENE {String(scene.number).padStart(2, "0")}</span>
                   <span className="scene-summary-main">
@@ -149,6 +232,7 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
                   ) : null}
                   <div className="shot-list">
                     {scene.shots.map((shot) => {
+                      const generation = generations[shot.id];
                       const selectedReferences = shot.referenceIds
                         .map((id) => referenceById.get(id))
                         .filter((reference): reference is DirectorReference => Boolean(reference));
@@ -182,6 +266,28 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
                               onChange={(event) => updatePrompt(scene.id, shot.id, event.target.value)}
                             />
                           </details>
+                          {generation?.status === "ready" ? (
+                            <div className="shot-video-result">
+                              <video controls playsInline preload="metadata" src={generation.videoUrl} />
+                              <div className="video-actions">
+                                <a className="small-action nav-link" href={`${generation.videoUrl}?download=1`}>파일 저장</a>
+                                <button className="small-action" type="button" onClick={() => generateShot(shot)}>다시 생성</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              className="shot-generate-button"
+                              type="button"
+                              disabled={generation?.status === "generating" || !shot.prompt.trim()}
+                              onClick={() => generateShot(shot)}
+                            >
+                              {generation?.status === "generating" ? <><span className="button-spinner" aria-hidden="true" />영상 생성 중…</> : generation?.status === "failed" ? "다시 생성" : "영상 만들기"}
+                            </button>
+                          )}
+                          {generation?.omittedReferenceIds.length ? (
+                            <p className="generation-note">현재 Veo 사람 이미지 정책에 따라 일부 Reference를 제외하고 생성합니다.</p>
+                          ) : null}
+                          {generation?.status === "failed" && generation.error ? <p className="feedback compact-feedback" role="alert">{generation.error}</p> : null}
                         </article>
                       );
                     })}

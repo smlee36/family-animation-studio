@@ -274,6 +274,29 @@ h1, h2, p { margin-top: 0; }
 .prompt-panel > summary { padding-top: 12px; color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 800; list-style: none; }
 .prompt-panel textarea { width: 100%; min-height: 150px; margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; outline: 0; color: var(--ink); background: #fffdf9; font-size: 12px; line-height: 1.55; resize: vertical; }
 .prompt-panel textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(73, 107, 96, 0.12); }
+.shot-generate-button {
+  display: inline-flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 13px;
+  border: 0;
+  border-radius: 13px;
+  color: white;
+  background: var(--accent);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 850;
+}
+.shot-generate-button:disabled { cursor: not-allowed; opacity: 0.62; }
+.shot-generate-button .button-spinner { width: 15px; height: 15px; }
+.generation-note { margin: 9px 2px 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.compact-feedback { margin-top: 10px; font-size: 12px; }
+.shot-video-result { margin-top: 14px; }
+.shot-video-result video { display: block; width: 100%; border-radius: 13px; background: #171513; aspect-ratio: 16 / 9; }
+.video-actions { display: flex; gap: 8px; margin-top: 9px; }
+.video-actions .small-action { min-height: 42px; text-decoration: none; }
 
 .readiness {
   display: flex;
