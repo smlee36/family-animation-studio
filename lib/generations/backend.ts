@@ -1,7 +1,7 @@
 import "server-only";
 
 import { refreshLtxGeneration, startLtxGeneration } from "@/lib/generations/ltx";
-import type { LtxPreset, ShotGenerationRecord, VideoAspectRatio, VideoGenerationProvider, VeoQualityTier } from "@/lib/generations/types";
+import type { LtxPreset, LtxRenderMode, ShotGenerationRecord, VideoAspectRatio, VideoGenerationProvider, VeoQualityTier } from "@/lib/generations/types";
 import { refreshVeoGeneration, startVeoGeneration, type ContinuityFrameInput } from "@/lib/generations/veo";
 
 export type StartVideoGenerationInput = {
@@ -14,6 +14,7 @@ export type StartVideoGenerationInput = {
   provider?: VideoGenerationProvider;
   qualityTier?: VeoQualityTier;
   ltxPreset?: LtxPreset;
+  ltxRenderMode?: LtxRenderMode;
   autoRegenerationCount?: number;
   parentGenerationId?: string;
   continuityFrame?: ContinuityFrameInput;

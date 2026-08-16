@@ -25,6 +25,19 @@ The start, middle, and end frames preserve the child, large teddy bear, living-r
 - Worker jobs, prompts, inputs, and logs are stored with owner-only permissions. The model prompt is loaded from the private job file by `run_job.py`, so it is not exposed in the operating-system process command line.
 - A one-minute keepalive cron restarts the worker if its private localhost health check fails. The durable job record lets queued or running work resume after a worker restart.
 
+## Fast preview and resident batch validation
+
+- Validation date: 2026-08-17, B200 production worker, 4-second 9:16 gentle-motion input.
+- Normal coexistence mode (A.X resident, LTX CPU offload): preview completed in 318 seconds.
+- LTX-dedicated resident mode, first preview including initial model load: 60 seconds.
+- LTX-dedicated resident mode, second preview with the pipeline already resident: 55 seconds.
+- All three outputs were non-empty H.264/AAC MP4 files and durable job records reached `succeeded`.
+- The batch-mode exit test stopped the resident runner, relaunched A.X, waited for its authenticated
+  `/v1/models` response, and confirmed served model id `x`. GPU memory returned to the prior A.X
+  operating level (about 95.9 GiB used).
+- Because the resident path requires A.X to release GPU memory, it is opt-in, rejects mode changes
+  while jobs are active, and automatically restores A.X after ten idle minutes.
+
 ## Compatibility decisions
 
 The GPU host is a managed container and does not expose Docker or sudo, so a nested NGC container cannot be launched from this session. The official LTX-2 repository is instead installed in an isolated virtual environment on the managed CUDA host. This keeps dependencies separate while using the host's Blackwell-compatible driver/runtime.

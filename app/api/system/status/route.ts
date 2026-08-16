@@ -9,6 +9,6 @@ export async function GET() {
   const environment = getEnvironmentStatus();
   const videoBackend = environment.configured.LTX_VIDEO
     ? await getLtxServiceStatus()
-    : { reachable: false, model: "", queueDepth: 0 };
+    : { reachable: false, model: "", queueDepth: 0, batchMode: null };
   return NextResponse.json({ ...environment, videoBackend });
 }

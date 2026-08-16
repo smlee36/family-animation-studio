@@ -8,12 +8,14 @@ import {
   generationVideoPath,
   saveGeneration,
 } from "@/lib/generations/storage";
+import { getReference } from "@/lib/references/storage";
 import type {
   LtxPreset,
+  LtxRenderMode,
   ShotGenerationRecord,
   VideoAspectRatio,
 } from "@/lib/generations/types";
-import { generateSceneFrameImage, type ContinuityFrameInput } from "@/lib/generations/veo";
+import type { ContinuityFrameInput } from "@/lib/generations/veo";
 
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 
@@ -22,6 +24,18 @@ type LtxJob = {
   status: "queued" | "running" | "succeeded" | "failed";
   stage?: string;
   error?: string;
+  queue_position?: number;
+  started_at?: string;
+  estimated_seconds_remaining?: number;
+};
+
+export type LtxBatchModeStatus = {
+  enabled: boolean;
+  state: "off" | "starting" | "ready" | "restoring" | "error";
+  residentReady: boolean;
+  axRunning: boolean;
+  idleRestoreSeconds: number;
+  message: string;
 };
 
 function apiConfig() {
@@ -50,15 +64,30 @@ export async function getLtxServiceStatus() {
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) return { reachable: false, model: "", queueDepth: 0 };
-    const body = await response.json() as { ok?: boolean; model?: string; queue_depth?: number };
+    const body = await response.json() as { ok?: boolean; model?: string; queue_depth?: number; batch_mode?: LtxBatchModeStatus };
     return {
       reachable: body.ok === true,
       model: typeof body.model === "string" ? body.model : "",
       queueDepth: typeof body.queue_depth === "number" ? body.queue_depth : 0,
+      batchMode: body.batch_mode || null,
     };
   } catch {
-    return { reachable: false, model: "", queueDepth: 0 };
+    return { reachable: false, model: "", queueDepth: 0, batchMode: null };
   }
+}
+
+export async function setLtxBatchMode(enabled: boolean): Promise<LtxBatchModeStatus> {
+  const { baseUrl, apiKey } = apiConfig();
+  const response = await fetch(`${baseUrl}/batch-mode`, {
+    method: "POST",
+    headers: { ...authenticatedHeaders(apiKey), "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+    cache: "no-store",
+    signal: AbortSignal.timeout(120_000),
+  });
+  const body = await response.json() as LtxBatchModeStatus & { detail?: string };
+  if (!response.ok) throw new Error(body.detail || `LTX batch mode failed with ${response.status}`);
+  return body;
 }
 
 async function readPrivateBlob(pathname: string) {
@@ -114,31 +143,30 @@ async function prepareStartFrame(input: {
     };
   }
 
-  const pathname = generationSceneMasterFramePath(input.id);
-  const generated = await generateSceneFrameImage({
-    id: input.id,
-    prompt: input.prompt,
-    referenceIds: input.referenceIds,
-    aspectRatio: input.aspectRatio,
-    pathname,
-  });
-  await put(pathname, generated.bytes, {
-    access: "private",
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    contentType: generated.mimeType,
-    cacheControlMaxAge: 60 * 60 * 24 * 30,
-  });
-  return {
-    bytes: generated.bytes,
-    mimeType: generated.mimeType,
-    pathname,
-    kind: "scene_master" as const,
-    model: generated.model,
-    sourceGenerationId: "",
-    usedReferenceIds: generated.usedReferenceIds,
-    omittedReferenceIds: generated.omittedReferenceIds,
-  };
+  // LTX is image-to-video, but a separately generated Scene frame is optional.
+  // When it is absent, use the highest-priority locked Master Reference itself
+  // as the first frame instead of calling a paid image-generation provider.
+  const requestedReferenceIds = [...new Set(input.referenceIds)].slice(0, 6);
+  for (const referenceId of requestedReferenceIds) {
+    const reference = await getReference(referenceId);
+    if (!reference?.imagePathname) continue;
+    try {
+      const loaded = await readPrivateBlob(reference.imagePathname);
+      return {
+        ...loaded,
+        pathname: reference.imagePathname,
+        kind: "scene_master" as const,
+        model: `master-reference:${reference.category}`,
+        sourceGenerationId: "",
+        usedReferenceIds: [referenceId],
+        omittedReferenceIds: requestedReferenceIds.filter((id) => id !== referenceId),
+      };
+    } catch (error) {
+      console.warn(`[ltx.start-frame] referenceId=${referenceId} could not be loaded`, error);
+    }
+  }
+
+  throw new Error("LTX requires a Scene frame or at least one usable Master Reference image");
 }
 
 export async function startLtxGeneration(input: {
@@ -153,6 +181,7 @@ export async function startLtxGeneration(input: {
   continuityFrame?: ContinuityFrameInput;
   aspectRatio?: VideoAspectRatio;
   ltxPreset?: LtxPreset;
+  ltxRenderMode?: LtxRenderMode;
 }) {
   const aspectRatio = input.aspectRatio || "16:9";
   const durationSeconds = duration(input.estimatedSeconds);
@@ -166,7 +195,11 @@ export async function startLtxGeneration(input: {
     model: "LTX-2.5 Dev BF16",
     provider: "ltx",
     ltxPreset: input.ltxPreset || "gentle",
+    ltxRenderMode: input.ltxRenderMode || "preview",
     backendStatus: "시작 프레임 준비 중",
+    backendQueuePosition: 0,
+    backendStartedAt: "",
+    estimatedSecondsRemaining: 0,
     sourcePrompt: input.prompt,
     prompt: input.prompt,
     continuitySourceGenerationId: input.continuityFrame?.sourceGenerationId || "",
@@ -213,6 +246,7 @@ export async function startLtxGeneration(input: {
     form.set("job_id", record.id);
     form.set("prompt", record.prompt);
     form.set("preset", record.ltxPreset || "gentle");
+    form.set("render_mode", record.ltxRenderMode || "preview");
     form.set("aspect_ratio", aspectRatio);
     form.set("duration_seconds", String(durationSeconds));
     form.set("seed", "42");
@@ -225,7 +259,15 @@ export async function startLtxGeneration(input: {
     });
     if (!response.ok) throw new Error(`LTX job submission failed with ${response.status}`);
     const job = await response.json() as LtxJob;
-    record = { ...record, operationName: job.id || record.id, backendStatus: job.stage || "B200 생성 대기 중", updatedAt: new Date().toISOString() };
+    record = {
+      ...record,
+      operationName: job.id || record.id,
+      backendStatus: job.stage || "B200 생성 대기 중",
+      backendQueuePosition: Math.max(0, job.queue_position || 0),
+      backendStartedAt: job.started_at || "",
+      estimatedSecondsRemaining: Math.max(0, job.estimated_seconds_remaining || 0),
+      updatedAt: new Date().toISOString(),
+    };
     await saveGeneration(record);
     return record;
   } catch (error) {
@@ -252,9 +294,18 @@ export async function refreshLtxGeneration(record: ShotGenerationRecord) {
   if (!response.ok) throw new Error(`LTX job polling failed with ${response.status}`);
   const job = await response.json() as LtxJob;
   if (job.status === "queued" || job.status === "running") {
-    if ((job.stage || "") === (record.backendStatus || "")) return record;
-    const pending = { ...record, backendStatus: job.stage || "B200 영상 생성 중", updatedAt: new Date().toISOString() };
-    await saveGeneration(pending);
+    const pending = {
+      ...record,
+      backendStatus: job.stage || "B200 영상 생성 중",
+      backendQueuePosition: Math.max(0, job.queue_position || 0),
+      backendStartedAt: job.started_at || record.backendStartedAt || "",
+      estimatedSecondsRemaining: Math.max(0, job.estimated_seconds_remaining || 0),
+      updatedAt: new Date().toISOString(),
+    };
+    const statusChanged = pending.backendStatus !== record.backendStatus ||
+      pending.backendQueuePosition !== record.backendQueuePosition ||
+      pending.backendStartedAt !== record.backendStartedAt;
+    if (statusChanged) await saveGeneration(pending);
     return pending;
   }
   if (job.status === "failed") {
@@ -268,6 +319,18 @@ export async function refreshLtxGeneration(record: ShotGenerationRecord) {
     };
     await saveGeneration(failed);
     return failed;
+  }
+
+  if (record.backendStatus !== "완성 영상을 안전하게 저장 중") {
+    const storing = {
+      ...record,
+      backendStatus: "완성 영상을 안전하게 저장 중",
+      backendQueuePosition: 0,
+      estimatedSecondsRemaining: 15,
+      updatedAt: new Date().toISOString(),
+    };
+    await saveGeneration(storing);
+    return storing;
   }
 
   const videoResponse = await fetch(`${baseUrl}/jobs/${record.operationName}/video`, {
@@ -292,6 +355,8 @@ export async function refreshLtxGeneration(record: ShotGenerationRecord) {
     ...record,
     status: "ready" as const,
     backendStatus: "완료",
+    backendQueuePosition: 0,
+    estimatedSecondsRemaining: 0,
     videoPathname: pathname,
     updatedAt: new Date().toISOString(),
   };

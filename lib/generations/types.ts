@@ -2,6 +2,7 @@ export type ShotGenerationStatus = "generating" | "ready" | "failed";
 export type VeoQualityTier = "fast" | "standard";
 export type VideoGenerationProvider = "google" | "ltx";
 export type LtxPreset = "gentle" | "action" | "camera";
+export type LtxRenderMode = "preview" | "final";
 export type ShotApprovalStatus = "pending" | "approved" | "needs_review";
 export type InitialFrameKind = "continuity" | "scene_master";
 export type VideoAspectRatio = "16:9" | "9:16";
@@ -36,7 +37,11 @@ export type ShotGenerationRecord = {
   model: string;
   provider?: VideoGenerationProvider;
   ltxPreset?: LtxPreset;
+  ltxRenderMode?: LtxRenderMode;
   backendStatus?: string;
+  backendQueuePosition?: number;
+  backendStartedAt?: string;
+  estimatedSecondsRemaining?: number;
   sourcePrompt?: string;
   prompt: string;
   continuitySourceGenerationId?: string;
@@ -76,7 +81,11 @@ export type ShotGenerationView = Pick<
   aspectRatio: VideoAspectRatio;
   provider: VideoGenerationProvider;
   ltxPreset: LtxPreset;
+  ltxRenderMode: LtxRenderMode;
   backendStatus: string;
+  backendQueuePosition: number;
+  backendStartedAt: string;
+  estimatedSecondsRemaining: number;
 };
 
 export function generationView(record: ShotGenerationRecord): ShotGenerationView {
@@ -87,7 +96,11 @@ export function generationView(record: ShotGenerationRecord): ShotGenerationView
     model: record.model,
     provider: record.provider || (record.model.toLowerCase().includes("ltx") ? "ltx" : "google"),
     ltxPreset: record.ltxPreset || "gentle",
+    ltxRenderMode: record.ltxRenderMode || "final",
     backendStatus: record.backendStatus || "",
+    backendQueuePosition: record.backendQueuePosition || 0,
+    backendStartedAt: record.backendStartedAt || "",
+    estimatedSecondsRemaining: Math.max(0, record.estimatedSecondsRemaining || 0),
     prompt: record.prompt,
     continuitySourceGenerationId: record.continuitySourceGenerationId || "",
     initialFrameKind: record.initialFrameKind || "",
@@ -116,7 +129,11 @@ export function isShotGenerationRecord(value: unknown): value is ShotGenerationR
     typeof record.operationName === "string" && typeof record.model === "string" && typeof record.prompt === "string" &&
     (record.provider === undefined || record.provider === "google" || record.provider === "ltx") &&
     (record.ltxPreset === undefined || record.ltxPreset === "gentle" || record.ltxPreset === "action" || record.ltxPreset === "camera") &&
+    (record.ltxRenderMode === undefined || record.ltxRenderMode === "preview" || record.ltxRenderMode === "final") &&
     (record.backendStatus === undefined || typeof record.backendStatus === "string") &&
+    (record.backendQueuePosition === undefined || (Number.isInteger(record.backendQueuePosition) && record.backendQueuePosition >= 0)) &&
+    (record.backendStartedAt === undefined || typeof record.backendStartedAt === "string") &&
+    (record.estimatedSecondsRemaining === undefined || (typeof record.estimatedSecondsRemaining === "number" && Number.isFinite(record.estimatedSecondsRemaining) && record.estimatedSecondsRemaining >= 0)) &&
     (record.sourcePrompt === undefined || typeof record.sourcePrompt === "string") &&
     (record.continuitySourceGenerationId === undefined || typeof record.continuitySourceGenerationId === "string") &&
     (record.continuityFramePathname === undefined || typeof record.continuityFramePathname === "string") &&

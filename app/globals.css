@@ -343,6 +343,8 @@ h1, h2, p { margin-top: 0; }
 .photo-video-picker > span { font-size: 30px; line-height: 1; }
 .photo-video-picker strong { font-size: 15px; }
 .photo-video-picker small { color: var(--muted); font-size: 11px; }
+.photo-video-selection { display: grid; gap: 9px; }
+.photo-video-preview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 .photo-video-preview {
   position: relative;
   width: 100%;
@@ -350,10 +352,24 @@ h1, h2, p { margin-top: 0; }
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 17px;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 1 / 1;
   background: #e9eeeb;
 }
 .photo-video-preview img { object-fit: contain; }
+.photo-video-preview > span {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border-radius: 50%;
+  color: white;
+  background: rgba(73, 107, 96, .88);
+  font-size: 11px;
+  font-weight: 900;
+}
 .photo-video-preview button {
   position: absolute;
   top: 8px;
@@ -397,6 +413,15 @@ h1, h2, p { margin-top: 0; }
 .photo-duration-selector label.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent-strong); background: var(--accent-soft); }
 .photo-duration-selector input { position: absolute; opacity: 0; pointer-events: none; }
 .photo-duration-selector span { font-size: 13px; font-weight: 850; }
+.photo-render-selector { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; border: 0; }
+.photo-render-selector legend { grid-column: 1 / -1; margin-bottom: 1px; font-size: 13px; font-weight: 850; }
+.photo-render-selector label, .photo-batch-toggle { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 13px; background: white; cursor: pointer; }
+.photo-render-selector label.selected, .photo-batch-toggle.selected { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.photo-render-selector label > span, .photo-batch-toggle > span { display: grid; min-width: 0; gap: 3px; }
+.photo-render-selector strong, .photo-batch-toggle strong { font-size: 12px; }
+.photo-render-selector small, .photo-batch-toggle small { color: var(--muted); font-size: 10px; line-height: 1.4; }
+.photo-render-selector input { position: absolute; opacity: 0; pointer-events: none; }
+.photo-batch-toggle input { flex: 0 0 auto; width: 18px; height: 18px; accent-color: var(--accent); }
 
 .phase-note {
   margin: 18px 0 0;
@@ -456,6 +481,15 @@ h1, h2, p { margin-top: 0; }
 .video-provider-selector span { display: grid; min-width: 0; gap: 3px; }
 .video-provider-selector strong { font-size: 12px; }
 .video-provider-selector small { color: var(--muted); font-size: 10px; line-height: 1.35; }
+.ltx-batch-mode { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 12px; margin: -4px 0 18px; padding: 13px; border: 1px solid var(--line); border-radius: 14px; background: #faf7f1; }
+.ltx-batch-mode.enabled { border-color: #a9c7bb; background: #edf6f2; }
+.ltx-batch-mode > div { display: grid; gap: 3px; }
+.ltx-batch-mode strong { color: var(--accent-strong); font-size: 13px; }
+.ltx-batch-mode span, .ltx-batch-mode > p { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.ltx-batch-mode > button { min-height: 42px; padding: 0 12px; border: 1px solid var(--accent); border-radius: 11px; color: var(--accent); background: white; font-size: 11px; font-weight: 850; }
+.ltx-batch-mode > button:disabled { opacity: .55; }
+.ltx-batch-mode > p { grid-column: 1 / -1; margin: 0; }
+.ltx-batch-mode .ltx-batch-message { color: var(--accent-strong); font-weight: 750; }
 .scene-list { display: grid; gap: 11px; }
 
 .scene-accordion {
@@ -575,6 +609,40 @@ h1, h2, p { margin-top: 0; }
 }
 .shot-generate-button:disabled { cursor: not-allowed; opacity: 0.62; }
 .shot-generate-button .button-spinner { width: 15px; height: 15px; }
+.ltx-render-actions { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 8px; margin-top: 13px; }
+.ltx-render-actions .shot-generate-button { margin-top: 0; }
+.ltx-render-actions .small-action { min-height: 48px; }
+.ltx-render-actions > small { grid-column: 1 / -1; color: var(--muted); font-size: 10px; text-align: center; }
+.ltx-generation-progress {
+  display: grid;
+  gap: 11px;
+  margin-top: 14px;
+  padding: 15px;
+  border: 1px solid #c8d9d3;
+  border-radius: 16px;
+  background: #f1f7f4;
+}
+.ltx-progress-summary { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.ltx-progress-summary strong { color: var(--accent-strong); font-size: 14px; }
+.ltx-progress-summary span { color: var(--muted); font-size: 11px; font-weight: 750; text-align: right; }
+.ltx-generation-progress ol { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; padding: 0; list-style: none; }
+.ltx-generation-progress li { position: relative; display: grid; justify-items: center; gap: 5px; color: #a49b91; }
+.ltx-generation-progress li:not(:last-child)::after {
+  position: absolute;
+  top: 12px;
+  left: calc(50% + 15px);
+  width: calc(100% - 30px);
+  height: 2px;
+  background: #d8d2ca;
+  content: "";
+}
+.ltx-generation-progress li.done:not(:last-child)::after { background: var(--accent); }
+.ltx-generation-progress li > span { display: grid; width: 25px; height: 25px; place-items: center; border-radius: 50%; background: #e1ddd8; font-size: 10px; font-weight: 900; }
+.ltx-generation-progress li.active, .ltx-generation-progress li.done { color: var(--accent-strong); }
+.ltx-generation-progress li.active > span { color: white; background: var(--accent); box-shadow: 0 0 0 5px rgba(72, 115, 100, .12); }
+.ltx-generation-progress li.done > span { color: white; background: var(--accent); }
+.ltx-generation-progress li small { font-size: 10px; font-weight: 800; }
+.ltx-generation-progress > p { margin: 0; color: var(--muted); font-size: 11px; text-align: center; }
 .generation-note { margin: 9px 2px 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .compact-feedback { margin-top: 10px; font-size: 12px; }
 .shot-video-result { margin-top: 14px; }
@@ -599,6 +667,11 @@ h1, h2, p { margin-top: 0; }
 .video-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 9px; }
 .video-actions .small-action { min-height: 42px; text-decoration: none; }
 .video-download-primary { display: flex; min-height: 48px; align-items: center; justify-content: center; margin-top: 10px; border: 1px solid var(--accent); border-radius: 14px; color: white; background: var(--accent); font-size: 14px; font-weight: 850; text-decoration: none; }
+.preview-approval-panel { display: grid; gap: 10px; margin-top: 10px; padding: 13px; border: 1px solid #b8d0c6; border-radius: 14px; background: #edf6f2; }
+.preview-approval-panel > div { display: grid; gap: 3px; }
+.preview-approval-panel strong { color: var(--accent-strong); font-size: 13px; }
+.preview-approval-panel span { color: var(--muted); font-size: 10px; line-height: 1.4; }
+.preview-approval-panel button { min-height: 48px; border: 0; border-radius: 12px; color: white; background: var(--accent); font-size: 13px; font-weight: 850; }
 .video-revision-panel { margin-top: 13px; padding: 14px; border: 1px solid #cddbd5; border-radius: 15px; background: #f2f7f4; }
 .video-revision-panel label { display: block; margin-bottom: 8px; color: var(--accent-strong); font-size: 14px; font-weight: 850; }
 .video-revision-panel textarea { display: block; width: 100%; min-height: 82px; padding: 11px 12px; border: 1px solid #c3d2cc; border-radius: 11px; outline: none; color: var(--ink); background: white; font-size: 13px; line-height: 1.55; resize: vertical; }
@@ -974,6 +1047,10 @@ button.small-action { font: inherit; font-size: 12px; font-weight: 750; }
   .story-input { min-height: 210px; padding: 14px; font-size: 16px; }
   .format-selector { grid-template-columns: 1fr; }
   .video-provider-selector { grid-template-columns: 1fr; }
+  .photo-render-selector, .ltx-render-actions { grid-template-columns: 1fr; }
+  .photo-render-selector legend, .ltx-render-actions > small { grid-column: 1; }
+  .ltx-batch-mode { grid-template-columns: 1fr; }
+  .ltx-batch-mode > button { width: 100%; }
   .scene-frame-actions { grid-template-columns: 1fr; }
   .library-heading { display: block; }
   .add-reference-button { width: 100%; margin-top: 18px; }
