@@ -1,6 +1,10 @@
 export type ShotGenerationStatus = "generating" | "ready" | "failed";
 export type VeoQualityTier = "fast" | "standard";
+export type VideoGenerationProvider = "google" | "ltx";
+export type LtxPreset = "gentle" | "action" | "camera";
 export type ShotApprovalStatus = "pending" | "approved" | "needs_review";
+export type InitialFrameKind = "continuity" | "scene_master";
+export type VideoAspectRatio = "16:9" | "9:16";
 
 export type ShotQualityScores = {
   characterConsistency: number;
@@ -26,12 +30,23 @@ export type ShotQualityResult = {
 export type ShotGenerationRecord = {
   version: 1;
   id: string;
+  episodeId?: string;
   shotId: string;
   operationName: string;
   model: string;
+  provider?: VideoGenerationProvider;
+  ltxPreset?: LtxPreset;
+  backendStatus?: string;
+  sourcePrompt?: string;
   prompt: string;
+  continuitySourceGenerationId?: string;
+  continuityFramePathname?: string;
+  continuityFrameMimeType?: string;
+  initialFrameKind?: InitialFrameKind;
+  initialFrameModel?: string;
   status: ShotGenerationStatus;
   durationSeconds: 4 | 6 | 8;
+  aspectRatio?: VideoAspectRatio;
   usedReferenceIds: string[];
   omittedReferenceIds: string[];
   videoPathname: string;
@@ -47,22 +62,38 @@ export type ShotGenerationRecord = {
 
 export type ShotGenerationView = Pick<
   ShotGenerationRecord,
-  "id" | "shotId" | "status" | "durationSeconds" | "usedReferenceIds" | "omittedReferenceIds" | "error" | "createdAt" | "updatedAt"
+  "id" | "shotId" | "model" | "prompt" | "status" | "durationSeconds" | "usedReferenceIds" | "omittedReferenceIds" | "error" | "createdAt" | "updatedAt"
 > & {
+  episodeId: string;
+  continuitySourceGenerationId: string;
+  initialFrameKind: InitialFrameKind | "";
   videoUrl: string;
   qualityTier: VeoQualityTier;
   autoRegenerationCount: number;
   parentGenerationId: string;
   approvalStatus: ShotApprovalStatus;
   qc: ShotQualityResult | null;
+  aspectRatio: VideoAspectRatio;
+  provider: VideoGenerationProvider;
+  ltxPreset: LtxPreset;
+  backendStatus: string;
 };
 
 export function generationView(record: ShotGenerationRecord): ShotGenerationView {
   return {
     id: record.id,
+    episodeId: record.episodeId || "",
     shotId: record.shotId,
+    model: record.model,
+    provider: record.provider || (record.model.toLowerCase().includes("ltx") ? "ltx" : "google"),
+    ltxPreset: record.ltxPreset || "gentle",
+    backendStatus: record.backendStatus || "",
+    prompt: record.prompt,
+    continuitySourceGenerationId: record.continuitySourceGenerationId || "",
+    initialFrameKind: record.initialFrameKind || "",
     status: record.status,
     durationSeconds: record.durationSeconds,
+    aspectRatio: record.aspectRatio || "16:9",
     usedReferenceIds: record.usedReferenceIds,
     omittedReferenceIds: record.omittedReferenceIds,
     error: record.error,
@@ -81,9 +112,20 @@ export function isShotGenerationRecord(value: unknown): value is ShotGenerationR
   if (!value || typeof value !== "object") return false;
   const record = value as Partial<ShotGenerationRecord>;
   return record.version === 1 && typeof record.id === "string" && typeof record.shotId === "string" &&
+    (record.episodeId === undefined || typeof record.episodeId === "string") &&
     typeof record.operationName === "string" && typeof record.model === "string" && typeof record.prompt === "string" &&
+    (record.provider === undefined || record.provider === "google" || record.provider === "ltx") &&
+    (record.ltxPreset === undefined || record.ltxPreset === "gentle" || record.ltxPreset === "action" || record.ltxPreset === "camera") &&
+    (record.backendStatus === undefined || typeof record.backendStatus === "string") &&
+    (record.sourcePrompt === undefined || typeof record.sourcePrompt === "string") &&
+    (record.continuitySourceGenerationId === undefined || typeof record.continuitySourceGenerationId === "string") &&
+    (record.continuityFramePathname === undefined || typeof record.continuityFramePathname === "string") &&
+    (record.continuityFrameMimeType === undefined || typeof record.continuityFrameMimeType === "string") &&
+    (record.initialFrameKind === undefined || record.initialFrameKind === "continuity" || record.initialFrameKind === "scene_master") &&
+    (record.initialFrameModel === undefined || typeof record.initialFrameModel === "string") &&
     (record.status === "generating" || record.status === "ready" || record.status === "failed") &&
     (record.durationSeconds === 4 || record.durationSeconds === 6 || record.durationSeconds === 8) &&
+    (record.aspectRatio === undefined || record.aspectRatio === "16:9" || record.aspectRatio === "9:16") &&
     Array.isArray(record.usedReferenceIds) && Array.isArray(record.omittedReferenceIds) &&
     typeof record.videoPathname === "string" && typeof record.error === "string" &&
     typeof record.createdAt === "string" && typeof record.updatedAt === "string" &&

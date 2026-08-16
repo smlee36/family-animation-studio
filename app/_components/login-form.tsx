@@ -45,7 +45,6 @@ export function LoginForm() {
         enterKeyHint="go"
         maxLength={128}
         required
-        autoFocus
       />
       <button className="primary-button" type="submit" disabled={!passcode || pending}>
         {pending ? "확인 중…" : "입장"}

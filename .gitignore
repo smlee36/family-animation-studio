@@ -24,3 +24,7 @@ yarn-error.log*
 .eslintcache
 *.tsbuildinfo
 next-env.d.ts
+
+# Python worker cache
+__pycache__/
+*.py[cod]

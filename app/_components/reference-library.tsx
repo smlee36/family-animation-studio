@@ -11,6 +11,7 @@ import {
 } from "@/lib/references/types";
 
 type PendingImage = { key: string; file: File; name: string };
+type EditDraft = { name: string; description: string; category: ReferenceCategory };
 
 function imageExtension(file: File) {
   const fromName = file.name.split(".").pop()?.toLowerCase();
@@ -40,6 +41,10 @@ export function ReferenceLibrary() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [editingId, setEditingId] = useState("");
+  const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
+  const [deletingSelected, setDeletingSelected] = useState(false);
   const replacingIds = useRef(new Set<string>());
 
   const loadReferences = useCallback(async (quiet = false) => {
@@ -170,9 +175,74 @@ export function ReferenceLibrary() {
     }
     setMessage(`${reference.name} Reference를 삭제했습니다.`);
     setReferences((current) => current.filter((item) => item.id !== reference.id));
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      next.delete(reference.id);
+      return next;
+    });
+  }
+
+  function startEditing(reference: ReferenceRecord) {
+    setEditingId(reference.id);
+    setEditDraft({ name: reference.name, description: reference.description, category: reference.category });
+    setError("");
+    setMessage("");
+  }
+
+  async function saveMetadata(reference: ReferenceRecord) {
+    if (!editDraft?.name.trim() || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/references/${reference.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...editDraft, name: editDraft.name.trim(), description: editDraft.description.trim() }),
+      });
+      const result = (await response.json()) as { reference?: ReferenceRecord; error?: string };
+      if (!response.ok || !result.reference) throw new Error(result.error || "고정 기준을 수정하지 못했습니다.");
+      setReferences((current) => current.map((item) => item.id === reference.id ? result.reference as ReferenceRecord : item));
+      setEditingId("");
+      setEditDraft(null);
+      setMessage(`${result.reference.name} 고정 기준을 수정했습니다.`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "고정 기준을 수정하지 못했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function toggleSelected(id: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function deleteSelectedReferences() {
+    if (!selectedIds.size || deletingSelected || !window.confirm(`선택한 ${selectedIds.size}장의 고정 기준 이미지를 삭제할까요?`)) return;
+    const ids = [...selectedIds];
+    setDeletingSelected(true);
+    setError("");
+    try {
+      const results = await Promise.all(ids.map(async (id) => ({ id, response: await fetch(`/api/references/${id}`, { method: "DELETE" }) })));
+      const failed = results.filter(({ response }) => !response.ok);
+      const deletedIds = new Set(results.filter(({ response }) => response.ok).map(({ id }) => id));
+      setReferences((current) => current.filter((item) => !deletedIds.has(item.id)));
+      setSelectedIds(new Set(failed.map(({ id }) => id)));
+      if (failed.length) throw new Error(`${ids.length - failed.length}장은 삭제했고, ${failed.length}장은 삭제하지 못했습니다.`);
+      setMessage(`${ids.length}장의 고정 기준 이미지를 삭제했습니다.`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "선택한 이미지를 삭제하지 못했습니다.");
+    } finally {
+      setDeletingSelected(false);
+    }
   }
 
   const visibleReferences = filter === "전체" ? references : references.filter((reference) => reference.category === filter);
+  const allVisibleSelected = visibleReferences.length > 0 && visibleReferences.every((reference) => selectedIds.has(reference.id));
 
   return (
     <main className="page-shell references-page">
@@ -185,7 +255,7 @@ export function ReferenceLibrary() {
         <div>
           <p className="eyebrow">가족 공동 자료실</p>
           <h1 className="studio-title">Master References</h1>
-          <p className="studio-copy">캐릭터·장소·소품 이미지를 여러 장 모아두면 이후 Director가 Shot에 맞는 자료를 자동 선택합니다. 다른 휴대폰의 변경도 화면을 다시 열면 바로 반영됩니다.</p>
+          <p className="studio-copy">여기의 이미지는 가족·장소·소품·그림체를 정하는 고정 Visual Bible입니다. 직접 선택해 정보 수정, 이미지 교체, 삭제할 수 있으며 다른 휴대폰에도 함께 반영됩니다.</p>
         </div>
         <button className="add-reference-button" type="button" onClick={() => setShowUpload((value) => !value)}>
           {showUpload ? "닫기" : "+ 이미지 등록"}
@@ -256,10 +326,34 @@ export function ReferenceLibrary() {
         ))}
       </div>
 
+      {!loading && visibleReferences.length ? (
+        <div className="reference-selection-bar">
+          <label>
+            <input
+              type="checkbox"
+              checked={allVisibleSelected}
+              onChange={() => setSelectedIds((current) => {
+                const next = new Set(current);
+                visibleReferences.forEach((reference) => allVisibleSelected ? next.delete(reference.id) : next.add(reference.id));
+                return next;
+              })}
+            />
+            현재 목록 전체 선택
+          </label>
+          <span>{selectedIds.size}장 선택</span>
+          <button type="button" disabled={!selectedIds.size || deletingSelected} onClick={() => void deleteSelectedReferences()}>
+            {deletingSelected ? "삭제 중…" : "선택 삭제"}
+          </button>
+        </div>
+      ) : null}
+
       {loading ? <div className="library-empty">Reference 목록을 불러오는 중…</div> : visibleReferences.length ? (
         <section className="reference-grid" aria-live="polite">
           {visibleReferences.map((reference) => (
-            <article className="reference-card" key={reference.id}>
+            <article className={`reference-card${selectedIds.has(reference.id) ? " selected" : ""}`} key={reference.id}>
+              <label className="reference-select" aria-label={`${reference.name} 선택`}>
+                <input type="checkbox" checked={selectedIds.has(reference.id)} onChange={() => toggleSelected(reference.id)} />
+              </label>
               <div className="reference-image">
                 <Image
                   src={`/api/references/${reference.id}/image?v=${encodeURIComponent(reference.updatedAt)}`}
@@ -270,21 +364,49 @@ export function ReferenceLibrary() {
                 />
               </div>
               <div className="reference-body">
-                <span className="reference-category">{reference.category}</span>
-                <h2>{reference.name}</h2>
-                {reference.description ? <p>{reference.description}</p> : null}
-                <time dateTime={reference.uploadedAt}>{new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium" }).format(new Date(reference.uploadedAt))}</time>
+                {editingId === reference.id && editDraft ? (
+                  <div className="reference-edit-form">
+                    <label>카테고리
+                      <select value={editDraft.category} onChange={(event) => setEditDraft((current) => current ? { ...current, category: event.target.value as ReferenceCategory } : current)}>
+                        {REFERENCE_CATEGORIES.map((item) => <option key={item}>{item}</option>)}
+                      </select>
+                    </label>
+                    <label>이름
+                      <input value={editDraft.name} maxLength={80} onChange={(event) => setEditDraft((current) => current ? { ...current, name: event.target.value } : current)} />
+                    </label>
+                    <label>설명
+                      <textarea value={editDraft.description} maxLength={500} onChange={(event) => setEditDraft((current) => current ? { ...current, description: event.target.value } : current)} />
+                    </label>
+                  </div>
+                ) : (
+                  <>
+                    <span className="reference-category">{reference.category}</span>
+                    <h2>{reference.name}</h2>
+                    {reference.description ? <p>{reference.description}</p> : null}
+                    <time dateTime={reference.uploadedAt}>{new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium" }).format(new Date(reference.uploadedAt))}</time>
+                  </>
+                )}
                 <div className="reference-actions">
-                  <label className="small-action">
-                    교체
-                    <input
-                      className="visually-hidden"
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp,image/avif,image/heic,image/heif"
-                      onChange={(event) => void replaceImage(reference, event.target.files?.[0])}
-                    />
-                  </label>
-                  <button className="small-action danger-action" type="button" onClick={() => void deleteReference(reference)}>삭제</button>
+                  {editingId === reference.id ? (
+                    <>
+                      <button className="small-action" type="button" disabled={saving || !editDraft?.name.trim()} onClick={() => void saveMetadata(reference)}>저장</button>
+                      <button className="small-action" type="button" disabled={saving} onClick={() => { setEditingId(""); setEditDraft(null); }}>취소</button>
+                    </>
+                  ) : (
+                    <>
+                      <button className="small-action" type="button" onClick={() => startEditing(reference)}>정보 수정</button>
+                      <label className="small-action">
+                        이미지 교체
+                        <input
+                          className="visually-hidden"
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp,image/avif,image/heic,image/heif"
+                          onChange={(event) => void replaceImage(reference, event.target.files?.[0])}
+                        />
+                      </label>
+                      <button className="small-action danger-action" type="button" onClick={() => void deleteReference(reference)}>삭제</button>
+                    </>
+                  )}
                 </div>
               </div>
             </article>

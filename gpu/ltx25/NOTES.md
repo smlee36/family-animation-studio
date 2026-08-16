@@ -15,6 +15,16 @@
 
 The start, middle, and end frames preserve the child, large teddy bear, living-room layout, and illustration style. Motion is intentionally subtle (breathing and smiling), with a small camera push-in. This is a passing baseline for a calm scene, not yet the final motion-quality preset.
 
+## Family Animation Studio integration validation
+
+- The authenticated public worker route accepted a real family illustration and completed a queued job through the Cloudflare Tunnel.
+- Output: H.264/AAC MP4, 1280x704, 97 frames, 24 fps, 4.04 seconds, 524,917 bytes.
+- End-to-end worker time including model loading: about 6 minutes.
+- Visual review of start, middle, and end frames confirmed stable 2D style, child identity, large teddy-bear proportions, and living-room layout.
+- The production Vercel application reports `LTX-2.5 Dev BF16` reachable and uses LTX as the default video provider. Google generation remains an explicit fallback.
+- Worker jobs, prompts, inputs, and logs are stored with owner-only permissions. The model prompt is loaded from the private job file by `run_job.py`, so it is not exposed in the operating-system process command line.
+- A one-minute keepalive cron restarts the worker if its private localhost health check fails. The durable job record lets queued or running work resume after a worker restart.
+
 ## Compatibility decisions
 
 The GPU host is a managed container and does not expose Docker or sudo, so a nested NGC container cannot be launched from this session. The official LTX-2 repository is instead installed in an isolated virtual environment on the managed CUDA host. This keeps dependencies separate while using the host's Blackwell-compatible driver/runtime.
@@ -39,4 +49,3 @@ Server status:
 ssh technode-b200 'tmux list-sessions | grep ltx25-comfy'
 ssh technode-b200 'curl -fsS http://127.0.0.1:8188/system_stats'
 ```
-

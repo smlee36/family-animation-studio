@@ -4,7 +4,8 @@ import { get } from "@vercel/blob";
 import OpenAI from "openai";
 import type { Responses } from "openai/resources/responses/responses";
 import { getReference } from "@/lib/references/storage";
-import type { ShotQualityResult, ShotQualityScores } from "@/lib/generations/types";
+import type { InitialFrameKind, ShotQualityResult, ShotQualityScores } from "@/lib/generations/types";
+import { CHILD_SCALE_LOCK, PARENT_SCALE_LOCK, TEDDY_SCALE_LOCK } from "@/lib/visual-bible";
 
 const QC_SCHEMA = {
   type: "object",
@@ -50,10 +51,16 @@ Score each category from 0 to 100:
 - backgroundConsistency: the setting does not drift or transform unexpectedly.
 - objectConsistency: key props retain their appearance and do not duplicate or disappear unexpectedly.
 - motionNaturalness: infer motion from changes across ordered frames; penalize jumps, ghosting, and implausible pose changes.
-- referenceMatch: compare against supplied reference images. If no reference image is supplied, judge prompt conformity without penalizing the absence of a reference.
-- continuity: the ordered frames plausibly progress from the described start state to the end state.
+- referenceMatch: the supplied Master References are immutable visual canon, not inspiration. Compare exact Korean family identity, face, hair, glasses, body proportions, clothing, room layout, furniture, object design, markings, colors, illustration style, and relative physical scale. Score below 85 when a referenced element is visibly reinterpreted, substituted, resized, or redesigned. If no reference image is supplied, judge prompt conformity without penalizing the absence of a reference.
+- continuity: when a PREVIOUS SHOT FINAL FRAME is supplied, compare it directly with ORDERED VIDEO FRAME 1. Character position, pose, gaze, clothing, camera angle, lighting, background, and object placement should continue naturally unless the Shot specification explicitly requests a change. Score below 70 for an unexplained visual jump. Then judge whether the ordered frames plausibly progress from the described start state to the end state.
 
-Write summary in concise natural Korean. Write correctionPrompt in concise production-ready English, leading with positive corrections. Do not produce a long prohibition list. The frames are sparse samples, so do not claim to have inspected audio or every video frame.`;
+Use these fixed size facts whenever those subjects appear:
+- ${CHILD_SCALE_LOCK}
+- ${PARENT_SCALE_LOCK}
+- ${TEDDY_SCALE_LOCK}
+If the child looks older, taller, or adult-proportioned, keep characterConsistency and referenceMatch below 70. If the teddy is miniature, duplicated, or not large enough for the child to lie against, keep objectConsistency and referenceMatch below 70.
+
+Write summary in concise natural Korean. Write correctionPrompt in concise production-ready English, leading with the exact scale correction and then the other most important corrections. Include the numeric child/teddy sizes above when either scale is wrong. Do not produce a long prohibition list. The frames are sparse samples, so do not claim to have inspected audio or every video frame.`;
 
 function clampScore(value: unknown) {
   return Math.max(0, Math.min(100, Math.round(typeof value === "number" ? value : 0)));
@@ -86,7 +93,7 @@ function overallScore(scores: ShotQualityScores) {
 }
 
 async function referenceContent(referenceIds: string[]) {
-  const references = (await Promise.all(referenceIds.slice(0, 3).map((id) => getReference(id))))
+  const references = (await Promise.all(referenceIds.slice(0, 6).map((id) => getReference(id))))
     .filter((reference) => Boolean(reference));
   const content = await Promise.all(references.map(async (reference) => {
     if (!reference) return [] as Responses.ResponseInputContent[];
@@ -104,6 +111,8 @@ async function referenceContent(referenceIds: string[]) {
 export async function evaluateShotQuality(input: {
   frames: string[];
   referenceIds: string[];
+  continuityFrame?: string;
+  initialFrameKind?: InitialFrameKind;
   shot: {
     title: string;
     action: string;
@@ -120,6 +129,12 @@ export async function evaluateShotQuality(input: {
     { type: "input_text", text: `ORDERED VIDEO FRAME ${index + 1} OF ${input.frames.length}` },
     { type: "input_image", detail: "auto", image_url: imageUrl },
   ]);
+  const continuityContent: Responses.ResponseInputContent[] = input.continuityFrame ? [
+    { type: "input_text", text: input.initialFrameKind === "scene_master"
+      ? "SCENE MASTER FIRST FRAME — compare this directly with ORDERED VIDEO FRAME 1. The video's first frame must preserve its exact 2D illustration style, composition, identities, proportions, and objects; penalize any conversion to realistic or live-action people."
+      : "PREVIOUS SHOT FINAL FRAME — compare this directly with ORDERED VIDEO FRAME 1 for cross-Shot continuity." },
+    { type: "input_image", detail: "high", image_url: input.continuityFrame },
+  ] : [];
   const model = process.env.OPENAI_QC_MODEL?.trim() || "gpt-5.6-terra";
   const client = new OpenAI({ apiKey, timeout: 120_000, maxRetries: 2 });
   const response = await client.responses.create({
@@ -133,6 +148,7 @@ export async function evaluateShotQuality(input: {
           text: `SHOT SPECIFICATION:\n${JSON.stringify(input.shot)}\n\nReference images appear first when available. Ordered sampled frames follow.`,
         },
         ...references,
+        ...continuityContent,
         ...frameContent,
       ],
     }],

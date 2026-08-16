@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { ApiError } from "@google/genai";
+import { get } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 import { jsonError, logServerError, requireApiSession } from "@/lib/api";
+import { startVideoGeneration } from "@/lib/generations/backend";
 import { getGeneration, saveGeneration } from "@/lib/generations/storage";
 import { evaluateShotQuality } from "@/lib/generations/qc";
 import { generationView } from "@/lib/generations/types";
-import { startVeoGeneration } from "@/lib/generations/veo";
+import { appendPromptInstruction, MAX_GENERATION_PROMPT_CHARS } from "@/lib/generations/prompt";
 
-export const maxDuration = 180;
+export const maxDuration = 300;
 
 const FRAME_PATTERN = /^data:image\/(jpeg|png|webp);base64,[a-z0-9+/=]+$/i;
 const MAX_FRAME_LENGTH = 900_000;
@@ -19,10 +21,10 @@ function cleanText(value: unknown, maxLength: number) {
 
 function regenerationError(error: unknown) {
   if (error instanceof ApiError) {
-    if (error.status === 429) return "Standard 재생성을 위한 Veo 사용 한도가 부족합니다.";
-    if (error.status === 401 || error.status === 403) return "Standard Veo 연결 권한을 확인해 주세요.";
+    if (error.status === 429) return "자동 보정 영상 생성을 위한 사용 한도가 부족합니다.";
+    if (error.status === 401 || error.status === 403) return "자동 보정 영상 모델의 연결 권한을 확인해 주세요.";
   }
-  return "Standard 자동 재생성을 시작하지 못했습니다.";
+  return "고정 기준 자동 재생성을 시작하지 못했습니다.";
 }
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -51,13 +53,23 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       startState: cleanText(shotValue.startState, 500),
       endState: cleanText(shotValue.endState, 500),
     };
-    const qc = await evaluateShotQuality({ frames, referenceIds: record.usedReferenceIds, shot });
+    const qcReferenceIds = [...new Set([...record.usedReferenceIds, ...record.omittedReferenceIds])].slice(0, 6);
+    let continuityFrame = "";
+    if (record.continuityFramePathname) {
+      const blob = await get(record.continuityFramePathname, { access: "private", useCache: true });
+      if (blob?.stream && blob.statusCode === 200) {
+        const bytes = await new Response(blob.stream).arrayBuffer();
+        continuityFrame = `data:${record.continuityFrameMimeType || blob.blob.contentType || "image/jpeg"};base64,${Buffer.from(bytes).toString("base64")}`;
+      }
+    }
+    const qc = await evaluateShotQuality({ frames, referenceIds: qcReferenceIds, shot, continuityFrame, initialFrameKind: record.initialFrameKind });
     const regenerationCount = record.autoRegenerationCount || 0;
-    const shouldRegenerate = qc.overall < 85 && regenerationCount < 2;
+    const meetsApprovalGate = qc.overall >= 85 && qc.scores.referenceMatch >= 85;
+    const shouldRegenerate = !meetsApprovalGate && regenerationCount < 2;
     const evaluatedRecord = {
       ...record,
       qc,
-      approvalStatus: qc.overall >= 85 ? "approved" as const : shouldRegenerate ? "pending" as const : "needs_review" as const,
+      approvalStatus: meetsApprovalGate ? "approved" as const : shouldRegenerate ? "pending" as const : "needs_review" as const,
       updatedAt: new Date().toISOString(),
     };
     await saveGeneration(evaluatedRecord);
@@ -67,16 +79,31 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     let autoRegenerationError = "";
     if (shouldRegenerate) {
       try {
-        const correctedPrompt = `${record.prompt}\n\nQC correction: ${qc.correctionPrompt}`.slice(0, 2_000);
-        const nextRecord = await startVeoGeneration({
+        const basePrompt = record.sourcePrompt || record.prompt;
+        const correctedPrompt = appendPromptInstruction(basePrompt, "QC correction — highest priority:", qc.correctionPrompt);
+        if (correctedPrompt.length > MAX_GENERATION_PROMPT_CHARS) {
+          throw new Error(`Corrected prompt exceeds ${MAX_GENERATION_PROMPT_CHARS} characters`);
+        }
+        const nextRecord = await startVideoGeneration({
           id: randomUUID(),
+          episodeId: record.episodeId,
           shotId: record.shotId,
           prompt: correctedPrompt,
           estimatedSeconds: record.durationSeconds,
-          referenceIds: [...new Set([...record.usedReferenceIds, ...record.omittedReferenceIds])].slice(0, 3),
+          referenceIds: [...new Set([...record.usedReferenceIds, ...record.omittedReferenceIds])].slice(0, 6),
           qualityTier: "standard",
+          provider: record.provider || (record.model.toLowerCase().includes("ltx") ? "ltx" : "google"),
+          ltxPreset: record.ltxPreset || "gentle",
           autoRegenerationCount: regenerationCount + 1,
           parentGenerationId: record.id,
+          continuityFrame: record.continuityFramePathname ? {
+            sourceGenerationId: record.continuitySourceGenerationId || "",
+            pathname: record.continuityFramePathname,
+            mimeType: record.continuityFrameMimeType,
+            kind: record.initialFrameKind,
+            model: record.initialFrameModel,
+          } : undefined,
+          aspectRatio: record.aspectRatio || "16:9",
         });
         autoRegeneration = generationView(nextRecord);
         console.info(`[qc.regenerate] requestId=${requestId} generationId=${nextRecord.id} parentGenerationId=${id} attempt=${nextRecord.autoRegenerationCount}`);

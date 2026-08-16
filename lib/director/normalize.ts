@@ -34,7 +34,7 @@ export function normalizeDirectorPlan(value: unknown, validReferenceIds: Set<str
       const rawSeconds = typeof shot.estimatedSeconds === "number" ? shot.estimatedSeconds : 6;
       const estimatedSeconds = Math.min(8, Math.max(4, Math.round(rawSeconds)));
       const referenceIds = Array.isArray(shot.referenceIds)
-        ? [...new Set(shot.referenceIds.filter((id): id is string => typeof id === "string" && validReferenceIds.has(id)))].slice(0, 3)
+        ? [...new Set(shot.referenceIds.filter((id): id is string => typeof id === "string" && validReferenceIds.has(id)))].slice(0, 6)
         : [];
 
       totalEstimatedSeconds += estimatedSeconds;

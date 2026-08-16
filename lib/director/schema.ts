@@ -41,7 +41,7 @@ export const DIRECTOR_PLAN_SCHEMA = {
                 estimatedSeconds: { type: "integer", minimum: 4, maximum: 8 },
                 referenceIds: {
                   type: "array",
-                  maxItems: 3,
+                  maxItems: 6,
                   items: { type: "string", maxLength: 80 },
                 },
                 referenceReason: { type: "string", maxLength: 240 },

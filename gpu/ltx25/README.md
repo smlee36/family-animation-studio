@@ -50,3 +50,19 @@ ssh -N -L 8188:127.0.0.1:8188 technode-b200
 터널을 유지한 상태에서 `http://127.0.0.1:8188`을 연다. 공식 I2V 예시는
 [`workflows/LTX-2.5_T2V_I2V_Two_Stage_Distilled.json`](workflows/LTX-2.5_T2V_I2V_Two_Stage_Distilled.json)을
 ComfyUI에 드래그해 불러온다.
+
+## Family Animation Studio API worker
+
+사이트는 `worker/app.py`의 인증된 작업 API를 사용한다. 요청 즉시
+`jobs/<generation-id>/job.json`을 기록하고 단일 큐에서 LTX를 실행하므로 브라우저나
+Vercel 요청이 종료되어도 생성은 계속된다. 완성 MP4는 사이트가 다시 받아 Private
+Vercel Blob에 영구 저장한다.
+
+외부 주소는 기존 Cloudflare Tunnel의 `/ltx/*` 경로만 워커로 분기한다. `/v1/*`의
+기존 LLM API는 그대로 유지한다. API 토큰은 B200의 `.ltx_api_token`과 Vercel의
+`LTX_API_KEY`에만 저장하며 저장소에는 넣지 않는다.
+
+```bash
+ssh technode-b200 '/NHNHOME/WORKSPACE/26mss002_U1A/ltx25/project-config/worker/start-worker.sh'
+ssh technode-b200 'tmux attach -t ltx25-worker'
+```

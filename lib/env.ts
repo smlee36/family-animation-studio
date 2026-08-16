@@ -5,7 +5,8 @@ export type RequiredServerEnv =
 
 export type EnvironmentStatus = {
   readyForPhaseOne: boolean;
-  configured: Record<RequiredServerEnv | "BLOB_STORAGE", boolean>;
+  configured: Record<RequiredServerEnv | "BLOB_STORAGE" | "LTX_VIDEO", boolean>;
+  defaultVideoProvider: "ltx" | "google";
 };
 
 export function getEnvironmentStatus(): EnvironmentStatus {
@@ -17,11 +18,13 @@ export function getEnvironmentStatus(): EnvironmentStatus {
       process.env.BLOB_STORE_ID?.trim() &&
         (process.env.VERCEL_OIDC_TOKEN?.trim() || process.env.BLOB_READ_WRITE_TOKEN?.trim()),
     ),
+    LTX_VIDEO: Boolean(process.env.LTX_API_BASE?.trim() && process.env.LTX_API_KEY?.trim()),
   };
 
   return {
     readyForPhaseOne: configured.FAMILY_STUDIO_PASSCODE,
     configured,
+    defaultVideoProvider: process.env.VIDEO_GENERATION_PROVIDER?.trim().toLowerCase() === "google" || !configured.LTX_VIDEO ? "google" : "ltx",
   };
 }
 

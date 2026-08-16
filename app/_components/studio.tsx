@@ -1,15 +1,25 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useMemo, useState } from "react";
+import { uploadPresigned } from "@vercel/blob/client";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { DirectorPlan, DirectorReference } from "@/lib/director/types";
-import type { ShotGenerationView } from "@/lib/generations/types";
+import type { EpisodeFormat, EpisodeStudioState, SceneFrameRecord } from "@/lib/episodes/types";
+import type { LtxPreset, ShotGenerationView, VideoGenerationProvider } from "@/lib/generations/types";
+import type { StoryInputView } from "@/lib/story-inputs/types";
 
 const DRAFT_KEY = "family-studio-story-draft";
 const QC_FRAME_COUNT = 5;
+const MAX_STORYBOARD_IMAGES = 3;
+const MAX_STORYBOARD_BYTES = 20 * 1024 * 1024;
+const STORYBOARD_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+type PendingStoryboard = { key: string; file: File; previewUrl: string };
 
 type DirectorApiResponse = {
+  episodeId?: string;
   plan?: DirectorPlan;
   references?: DirectorReference[];
   error?: string;
@@ -24,11 +34,23 @@ type GenerationApiResponse = {
   requestId?: string;
 };
 
+type SceneFrameApiResponse = {
+  frame?: SceneFrameRecord;
+  error?: string;
+  requestId?: string;
+};
+
+function imageExtension(file: File) {
+  if (file.type === "image/png") return "png";
+  if (file.type === "image/webp") return "webp";
+  return "jpg";
+}
+
 function apiError(body: GenerationApiResponse, fallback: string) {
   return `${body.error || fallback}${body.requestId ? ` (문의 번호: ${body.requestId})` : ""}`;
 }
 
-function waitForMediaEvent(media: HTMLMediaElement, eventName: "loadedmetadata" | "seeked", timeoutMs = 15_000) {
+function waitForMediaEvent(media: HTMLMediaElement, eventName: "loadedmetadata" | "loadeddata" | "seeked", timeoutMs = 30_000) {
   return new Promise<void>((resolve, reject) => {
     const timeoutId = window.setTimeout(() => {
       cleanup();
@@ -52,34 +74,119 @@ function waitForMediaEvent(media: HTMLMediaElement, eventName: "loadedmetadata" 
   });
 }
 
-async function captureVideoFrames(videoUrl: string) {
+function seekVideoFrame(video: HTMLVideoElement, targetTime: number, timeoutMs = 20_000) {
+  return new Promise<void>((resolve, reject) => {
+    let intervalId = 0;
+    const timeoutId = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("iPhone에서 영상 프레임 위치를 준비하는 시간이 초과되었습니다. 검수 다시 시도를 눌러주세요."));
+    }, timeoutMs);
+    const isReady = () => video.readyState >= 2 && !video.seeking && Math.abs(video.currentTime - targetTime) < 0.2;
+    const check = () => {
+      if (!isReady()) return;
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error("영상 검수용 화면을 불러오지 못했습니다."));
+    };
+    const cleanup = () => {
+      window.clearTimeout(timeoutId);
+      window.clearInterval(intervalId);
+      video.removeEventListener("seeked", check);
+      video.removeEventListener("timeupdate", check);
+      video.removeEventListener("loadeddata", check);
+      video.removeEventListener("error", onError);
+    };
+    video.addEventListener("seeked", check);
+    video.addEventListener("timeupdate", check);
+    video.addEventListener("loadeddata", check);
+    video.addEventListener("error", onError, { once: true });
+    intervalId = window.setInterval(check, 100);
+    video.currentTime = targetTime;
+    check();
+  });
+}
+
+async function captureVideoFramesAtRatios(videoUrl: string, ratios: number[]) {
+  let localVideoUrl = "";
+  let videoSource = videoUrl;
+  try {
+    const response = await fetch(videoUrl, { cache: "no-store", credentials: "same-origin" });
+    if (!response.ok) throw new Error(`video fetch returned ${response.status}`);
+    const videoBlob = await response.blob();
+    if (!videoBlob.size) throw new Error("video fetch returned an empty file");
+    localVideoUrl = URL.createObjectURL(videoBlob);
+    videoSource = localVideoUrl;
+  } catch (error) {
+    // Mobile Safari can reject a full fetch of a range-streamed MP4 with the
+    // opaque message "Load failed" even though its native media loader can
+    // play and seek the exact same authenticated, same-origin URL.
+    console.warn("[qc.frames] Blob preload failed; using native media loading.", error);
+  }
   const video = document.createElement("video");
   video.muted = true;
   video.playsInline = true;
   video.preload = "auto";
-  video.src = videoUrl;
-  if (video.readyState < 1) await waitForMediaEvent(video, "loadedmetadata");
-  if (!Number.isFinite(video.duration) || video.duration <= 0) throw new Error("영상 길이를 확인하지 못했습니다.");
-
-  const scale = Math.min(1, 640 / Math.max(1, video.videoWidth));
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
-  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("영상 검수 화면을 준비하지 못했습니다.");
-
-  const frames: string[] = [];
-  for (let index = 0; index < QC_FRAME_COUNT; index += 1) {
-    const ratio = index / (QC_FRAME_COUNT - 1);
-    const targetTime = Math.min(Math.max(0.01, video.duration * ratio), Math.max(0.01, video.duration - 0.05));
-    video.currentTime = targetTime;
-    await waitForMediaEvent(video, "seeked");
-    context.drawImage(video, 0, 0, canvas.width, canvas.height);
-    frames.push(canvas.toDataURL("image/jpeg", 0.72));
-  }
-  video.removeAttribute("src");
+  video.style.position = "fixed";
+  video.style.width = "1px";
+  video.style.height = "1px";
+  video.style.opacity = "0";
+  video.style.pointerEvents = "none";
+  document.body.appendChild(video);
+  video.src = videoSource;
   video.load();
-  return frames;
+  try {
+    if (video.readyState < 1) await waitForMediaEvent(video, "loadedmetadata");
+    if (!Number.isFinite(video.duration) || video.duration <= 0) throw new Error("영상 길이를 확인하지 못했습니다.");
+    if (video.readyState < 2) {
+      await waitForMediaEvent(video, "loadeddata", 45_000);
+    }
+
+    const scale = Math.min(1, 640 / Math.max(1, video.videoWidth));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("영상 검수 화면을 준비하지 못했습니다.");
+
+    const frames: string[] = [];
+    for (const ratio of ratios) {
+      const targetTime = Math.min(Math.max(0.05, video.duration * ratio), Math.max(0.05, video.duration - 0.08));
+      if (Math.abs(video.currentTime - targetTime) > 0.01) {
+        await seekVideoFrame(video, targetTime);
+      }
+      if (video.readyState < 2) await waitForMediaEvent(video, "loadeddata");
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      frames.push(canvas.toDataURL("image/jpeg", 0.72));
+    }
+    return frames;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (/load failed|failed to fetch|network request failed/i.test(message)) {
+      throw new Error("iPhone에서 검수용 영상을 불러오지 못했습니다. 영상을 재생한 뒤 검수 다시 시도를 눌러주세요.");
+    }
+    throw error;
+  } finally {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    video.remove();
+    if (localVideoUrl) URL.revokeObjectURL(localVideoUrl);
+  }
+}
+
+async function captureVideoFrames(videoUrl: string) {
+  const frameCount = /iPhone|iPad|iPod/i.test(navigator.userAgent) ? 3 : QC_FRAME_COUNT;
+  const ratios = Array.from({ length: frameCount }, (_, index) => index === 0 ? 0.02 : 0.9 * index / (frameCount - 1));
+  return captureVideoFramesAtRatios(videoUrl, ratios);
+}
+
+async function captureFinalVideoFrame(videoUrl: string) {
+  const [frame] = await captureVideoFramesAtRatios(videoUrl, [1]);
+  if (!frame) throw new Error("이전 Shot의 마지막 화면을 준비하지 못했습니다.");
+  return frame;
 }
 
 function formatDuration(totalSeconds: number) {
@@ -89,24 +196,167 @@ function formatDuration(totalSeconds: number) {
   return `약 ${minutes}분${seconds ? ` ${seconds}초` : ""}`;
 }
 
-export function Studio({ environmentReady }: { environmentReady: boolean }) {
+function ltxPresetForShot(shot: DirectorPlan["scenes"][number]["shots"][number]): LtxPreset {
+  const text = `${shot.title} ${shot.action} ${shot.prompt}`;
+  if (/camera|dolly|pan|zoom|tracking|카메라|줌|패닝|이동 촬영/i.test(text)) return "camera";
+  if (/run|walk|jump|carry|hand over|stand up|sit down|달리|걷|뛰|점프|이동|건네|일어나|앉아/i.test(text)) return "action";
+  return "gentle";
+}
+
+export function Studio({
+  environmentReady,
+  initialEpisode = null,
+  focusShot = "",
+}: {
+  environmentReady: boolean;
+  initialEpisode?: EpisodeStudioState | null;
+  focusShot?: string;
+}) {
   const router = useRouter();
-  const [story, setStory] = useState("");
-  const [plan, setPlan] = useState<DirectorPlan | null>(null);
-  const [references, setReferences] = useState<DirectorReference[]>([]);
+  const [episodeId, setEpisodeId] = useState(initialEpisode?.episode.id || "");
+  const [format, setFormat] = useState<EpisodeFormat>(initialEpisode?.episode.format || "reels");
+  const [story, setStory] = useState(initialEpisode?.episode.story || "");
+  const [plan, setPlan] = useState<DirectorPlan | null>(initialEpisode?.episode.plan || null);
+  const [references, setReferences] = useState<DirectorReference[]>(initialEpisode?.references || []);
+  const [storyboardInputs, setStoryboardInputs] = useState<StoryInputView[]>(initialEpisode?.storyboardInputs || []);
+  const [pendingStoryboards, setPendingStoryboards] = useState<PendingStoryboard[]>([]);
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState("");
-  const [generations, setGenerations] = useState<Record<string, ShotGenerationView>>({});
+  const [error, setError] = useState(initialEpisode?.episode.error || "");
+  const [generations, setGenerations] = useState<Record<string, ShotGenerationView>>(initialEpisode?.generations || {});
+  const [generationVersions, setGenerationVersions] = useState<Record<string, ShotGenerationView[]>>(initialEpisode?.generationVersions || {});
+  const [videoProvider, setVideoProvider] = useState<VideoGenerationProvider>(() => {
+    const existing = Object.values(initialEpisode?.generations || {}).find((generation) => generation.provider);
+    return existing?.provider || "ltx";
+  });
+  const [sceneFrames, setSceneFrames] = useState<Record<string, SceneFrameRecord>>(initialEpisode?.episode.sceneFrames || {});
+  const [sceneFrameInstructions, setSceneFrameInstructions] = useState<Record<string, string>>({});
+  const [sceneFrameMessages, setSceneFrameMessages] = useState<Record<string, string>>({});
+  const [pendingSceneFrames, setPendingSceneFrames] = useState<Set<string>>(new Set());
+  const [allSceneFramesPending, setAllSceneFramesPending] = useState(false);
   const [qcPendingShots, setQcPendingShots] = useState<Set<string>>(new Set());
   const [qcMessages, setQcMessages] = useState<Record<string, string>>({});
-  const [openScenes, setOpenScenes] = useState<Set<string>>(new Set());
+  const [revisionText, setRevisionText] = useState<Record<string, string>>({});
+  const [revisionPendingShots, setRevisionPendingShots] = useState<Set<string>>(new Set());
+  const [referenceEditorShotId, setReferenceEditorShotId] = useState("");
+  const [referenceDrafts, setReferenceDrafts] = useState<Record<string, string[]>>({});
+  const [referenceSavingShotIds, setReferenceSavingShotIds] = useState<Set<string>>(new Set());
+  const [openScenes, setOpenScenes] = useState<Set<string>>(
+    new Set((() => {
+      const scenes = initialEpisode?.episode.plan?.scenes || [];
+      const focusedScene = focusShot ? scenes.find((scene) => scene.shots.some((shot) => shot.id === focusShot)) : null;
+      const initialScene = focusedScene || scenes[0];
+      return initialScene ? [initialScene.id] : [];
+    })()),
+  );
   const referenceById = useMemo(() => new Map(references.map((reference) => [reference.id, reference])), [references]);
+  const pendingStoryboardsRef = useRef(pendingStoryboards);
+  const initialPendingGenerationsRef = useRef(
+    Object.entries(initialEpisode?.generations || {}).filter(([, generation]) => generation.status === "generating"),
+  );
+  pendingStoryboardsRef.current = pendingStoryboards;
+
+  useEffect(() => () => {
+    pendingStoryboardsRef.current.forEach((input) => URL.revokeObjectURL(input.previewUrl));
+  }, []);
+
+  useEffect(() => {
+    if (!focusShot || !plan) return;
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(`shot-${focusShot}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusShot, plan]);
+
+  useEffect(() => {
+    if (!plan || initialPendingGenerationsRef.current.length === 0) return;
+    const pendingGenerations = initialPendingGenerationsRef.current.splice(0);
+    let cancelled = false;
+
+    for (const [shotId, initialGeneration] of pendingGenerations) {
+      void (async () => {
+        let generation = initialGeneration;
+        try {
+          for (let attempt = 0; attempt < 90 && generation.status === "generating" && !cancelled; attempt += 1) {
+            const response = await fetch(`/api/shots/generate/${generation.id}`, { cache: "no-store" });
+            const body = (await response.json()) as GenerationApiResponse;
+            if (!response.ok || !body.generation) {
+              throw new Error(apiError(body, "영상 생성 상태를 다시 불러오지 못했습니다."));
+            }
+            generation = body.generation;
+            if (!cancelled) setGenerations((current) => ({ ...current, [shotId]: generation }));
+            if (generation.status === "generating") {
+              await new Promise((resolve) => window.setTimeout(resolve, 10_000));
+            }
+          }
+          if (!cancelled && generation.status === "ready") {
+            setQcMessages((current) => ({ ...current, [shotId]: "영상 생성을 이어서 완료했어요. 검수 다시 시도를 눌러 확인할 수 있어요." }));
+          }
+        } catch (caught) {
+          if (!cancelled) {
+            setQcMessages((current) => ({
+              ...current,
+              [shotId]: caught instanceof Error ? caught.message : "영상 생성 상태를 다시 불러오지 못했습니다.",
+            }));
+          }
+        }
+      })();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [plan]);
+
+  function selectStoryboardFiles(files: FileList | null) {
+    if (!files) return;
+    const available = Math.max(0, MAX_STORYBOARD_IMAGES - storyboardInputs.length - pendingStoryboards.length);
+    const selected = Array.from(files).slice(0, available);
+    const invalid = selected.find((file) => !STORYBOARD_TYPES.has(file.type) || file.size > MAX_STORYBOARD_BYTES);
+    if (invalid) {
+      setError("JPG, PNG, WebP 이미지만 장당 20MB까지 추가할 수 있어요.");
+      return;
+    }
+    if (!available) {
+      setError("스토리보드 이미지는 최대 3장까지 추가할 수 있어요.");
+      return;
+    }
+    setPendingStoryboards((current) => [...current, ...selected.map((file) => ({ key: crypto.randomUUID(), file, previewUrl: URL.createObjectURL(file) }))]);
+    setError(Array.from(files).length > available ? "스토리보드 이미지는 최대 3장까지 추가됩니다." : "");
+  }
+
+  function removePendingStoryboard(key: string) {
+    setPendingStoryboards((current) => current.filter((input) => {
+      if (input.key === key) URL.revokeObjectURL(input.previewUrl);
+      return input.key !== key;
+    }));
+  }
+
+  async function uploadStoryboard(file: File) {
+    const id = crypto.randomUUID();
+    const uploadId = crypto.randomUUID();
+    const pathname = `story-inputs/images/${id}/${uploadId}.${imageExtension(file)}`;
+    const blob = await uploadPresigned(pathname, file, {
+      access: "private",
+      handleUploadUrl: "/api/story-inputs/upload",
+      clientPayload: JSON.stringify({ inputId: id }),
+      multipart: file.size > 10 * 1024 * 1024,
+    });
+    const response = await fetch("/api/story-inputs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, name: file.name || "스토리보드", imagePathname: blob.pathname, contentType: file.type, size: file.size }),
+    });
+    const body = (await response.json()) as { input?: StoryInputView; error?: string; requestId?: string };
+    if (!response.ok || !body.input) throw new Error(`${body.error || "이미지를 저장하지 못했습니다."}${body.requestId ? ` (문의 번호: ${body.requestId})` : ""}`);
+    return body.input;
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmedStory = story.trim();
-    if (trimmedStory.length < 10 || pending) {
-      if (trimmedStory.length < 10) setError("이야기를 조금 더 자세히 들려주세요.");
+    const hasStoryboard = storyboardInputs.length + pendingStoryboards.length > 0;
+    if ((trimmedStory.length < 10 && !hasStoryboard) || pending) {
+      if (trimmedStory.length < 10 && !hasStoryboard) setError("이야기를 적거나 스토리보드 이미지를 추가해 주세요.");
       return;
     }
 
@@ -114,10 +364,15 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
     setError("");
     setPlan(null);
     try {
+      const uploadedInputs = [...storyboardInputs];
+      for (const pendingInput of pendingStoryboards) uploadedInputs.push(await uploadStoryboard(pendingInput.file));
+      setStoryboardInputs(uploadedInputs);
+      pendingStoryboards.forEach((input) => URL.revokeObjectURL(input.previewUrl));
+      setPendingStoryboards([]);
       const response = await fetch("/api/director", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ story: trimmedStory }),
+        body: JSON.stringify({ story: trimmedStory, storyboardInputIds: uploadedInputs.map((input) => input.id), format }),
       });
       const body = (await response.json()) as DirectorApiResponse;
       if (!response.ok || !body.plan) {
@@ -126,12 +381,80 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
       }
       setPlan(body.plan);
       setReferences(body.references || []);
+      setEpisodeId(body.episodeId || "");
+      setSceneFrames({});
       setOpenScenes(new Set(body.plan.scenes[0] ? [body.plan.scenes[0].id] : []));
       sessionStorage.removeItem(DRAFT_KEY);
+      if (body.episodeId) router.replace(`/studio?episode=${body.episodeId}`, { scroll: false });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "이야기를 구성하지 못했습니다. 잠시 후 다시 시도해 주세요.");
     } finally {
       setPending(false);
+    }
+  }
+
+  async function generateSceneFrame(sceneId: string) {
+    if (!episodeId || pendingSceneFrames.has(sceneId)) return null;
+    setPendingSceneFrames((current) => new Set(current).add(sceneId));
+    setSceneFrameMessages((current) => ({ ...current, [sceneId]: "" }));
+    try {
+      const response = await fetch(`/api/episodes/${episodeId}/scenes/${sceneId}/frame`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instruction: sceneFrameInstructions[sceneId] || "" }),
+      });
+      const body = (await response.json()) as SceneFrameApiResponse;
+      if (!response.ok || !body.frame) {
+        throw new Error(`${body.error || "Scene 이미지를 만들지 못했습니다."}${body.requestId ? ` (문의 번호: ${body.requestId})` : ""}`);
+      }
+      setSceneFrames((current) => ({ ...current, [sceneId]: body.frame as SceneFrameRecord }));
+      setSceneFrameInstructions((current) => ({ ...current, [sceneId]: "" }));
+      return body.frame;
+    } catch (caught) {
+      setSceneFrameMessages((current) => ({ ...current, [sceneId]: caught instanceof Error ? caught.message : "Scene 이미지 생성 중 문제가 생겼습니다." }));
+      return null;
+    } finally {
+      setPendingSceneFrames((current) => {
+        const next = new Set(current);
+        next.delete(sceneId);
+        return next;
+      });
+    }
+  }
+
+  async function generateMissingSceneFrames() {
+    if (!plan || allSceneFramesPending) return;
+    setAllSceneFramesPending(true);
+    try {
+      for (const scene of plan.scenes) {
+        if (!sceneFrames[scene.id]) await generateSceneFrame(scene.id);
+      }
+    } finally {
+      setAllSceneFramesPending(false);
+    }
+  }
+
+  async function approveSceneFrame(sceneId: string, approved: boolean) {
+    if (!episodeId || pendingSceneFrames.has(sceneId)) return;
+    setPendingSceneFrames((current) => new Set(current).add(sceneId));
+    setSceneFrameMessages((current) => ({ ...current, [sceneId]: "" }));
+    try {
+      const response = await fetch(`/api/episodes/${episodeId}/scenes/${sceneId}/frame`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approved }),
+      });
+      const body = (await response.json()) as SceneFrameApiResponse;
+      if (!response.ok || !body.frame) throw new Error(`${body.error || "Scene 이미지 승인을 저장하지 못했습니다."}${body.requestId ? ` (문의 번호: ${body.requestId})` : ""}`);
+      setSceneFrames((current) => ({ ...current, [sceneId]: body.frame as SceneFrameRecord }));
+    } catch (caught) {
+      setSceneFrameMessages((current) => ({ ...current, [sceneId]: caught instanceof Error ? caught.message : "Scene 이미지 승인 중 문제가 생겼습니다." }));
+    } finally {
+      setPendingSceneFrames((current) => {
+        const next = new Set(current);
+        next.delete(sceneId);
+        return next;
+      });
     }
   }
 
@@ -145,9 +468,72 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
     }));
   }
 
+  async function saveCurrentPlan(planToSave = plan) {
+    if (!episodeId || !planToSave) return false;
+    try {
+      const response = await fetch(`/api/episodes/${episodeId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: planToSave }),
+      });
+      if (!response.ok) throw new Error("프롬프트 수정 내용을 저장하지 못했습니다.");
+      return true;
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "프롬프트 수정 내용을 저장하지 못했습니다.");
+      return false;
+    }
+  }
+
+  function openReferenceEditor(shotId: string, referenceIds: string[]) {
+    setReferenceDrafts((current) => ({ ...current, [shotId]: [...referenceIds] }));
+    setReferenceEditorShotId((current) => current === shotId ? "" : shotId);
+  }
+
+  function toggleShotReference(shotId: string, referenceId: string) {
+    setReferenceDrafts((current) => {
+      const selected = current[shotId] || [];
+      if (selected.includes(referenceId)) return { ...current, [shotId]: selected.filter((id) => id !== referenceId) };
+      if (selected.length >= 6) {
+        setQcMessages((messages) => ({ ...messages, [shotId]: "고정 기준은 Shot당 최대 6장까지 선택할 수 있어요." }));
+        return current;
+      }
+      setQcMessages((messages) => ({ ...messages, [shotId]: "" }));
+      return { ...current, [shotId]: [...selected, referenceId] };
+    });
+  }
+
+  async function saveShotReferences(sceneId: string, shotId: string) {
+    if (!plan || referenceSavingShotIds.has(shotId)) return;
+    const referenceIds = referenceDrafts[shotId] || [];
+    const updatedPlan: DirectorPlan = {
+      ...plan,
+      scenes: plan.scenes.map((scene) => scene.id !== sceneId ? scene : {
+        ...scene,
+        shots: scene.shots.map((shot) => shot.id === shotId ? {
+          ...shot,
+          referenceIds,
+          referenceReason: referenceIds.length ? "사용자가 선택한 고정 Visual Bible" : "직접 전달 이미지 없이 전체 Visual Bible의 분석 조건을 적용",
+        } : shot),
+      }),
+    };
+    setReferenceSavingShotIds((current) => new Set(current).add(shotId));
+    setQcMessages((current) => ({ ...current, [shotId]: "" }));
+    try {
+      if (!(await saveCurrentPlan(updatedPlan))) return;
+      setPlan(updatedPlan);
+      setReferenceEditorShotId("");
+    } finally {
+      setReferenceSavingShotIds((current) => {
+        const next = new Set(current);
+        next.delete(shotId);
+        return next;
+      });
+    }
+  }
+
   async function pollGeneration(shotId: string, initialGeneration: ShotGenerationView) {
     let generation = initialGeneration;
-    for (let attempt = 0; attempt < 40 && generation.status === "generating"; attempt += 1) {
+    for (let attempt = 0; attempt < 90 && generation.status === "generating"; attempt += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, 10_000));
       const pollResponse = await fetch(`/api/shots/generate/${generation.id}`, { cache: "no-store" });
       const pollBody = (await pollResponse.json()) as GenerationApiResponse;
@@ -159,6 +545,27 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
     }
     if (generation.status === "generating") throw new Error("영상 생성이 오래 걸리고 있습니다. 잠시 후 다시 시도해 주세요.");
     return generation;
+  }
+
+  function rememberGenerationVersion(shotId: string, generation: ShotGenerationView | undefined) {
+    if (!generation?.id || generation.status !== "ready") return;
+    setGenerationVersions((current) => {
+      const versions = current[shotId] || [];
+      const next = versions.some((item) => item.id === generation.id)
+        ? versions.map((item) => item.id === generation.id ? generation : item)
+        : [...versions, generation];
+      return { ...current, [shotId]: next };
+    });
+  }
+
+  function previousShotInSameScene(shotId: string) {
+    if (!plan) return null;
+    for (const scene of plan.scenes) {
+      const shotIndex = scene.shots.findIndex((item) => item.id === shotId);
+      if (shotIndex > 0) return scene.shots[shotIndex - 1];
+      if (shotIndex === 0) return null;
+    }
+    return null;
   }
 
   async function runQcCycle(shot: DirectorPlan["scenes"][number]["shots"][number], initialGeneration: ShotGenerationView) {
@@ -190,6 +597,7 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
           setQcMessages((current) => ({ ...current, [shot.id]: body.autoRegenerationError || "" }));
         }
         if (!body.autoRegeneration) break;
+        rememberGenerationVersion(shot.id, body.generation);
         generation = body.autoRegeneration;
         setGenerations((current) => ({ ...current, [shot.id]: generation }));
         generation = await pollGeneration(shot.id, generation);
@@ -210,13 +618,51 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
   }
 
   async function generateShot(shot: DirectorPlan["scenes"][number]["shots"][number]) {
+    const shotScene = plan?.scenes.find((scene) => scene.shots.some((item) => item.id === shot.id));
+    if (!shotScene) return;
+    if (format === "reels" && sceneFrames[shotScene.id]?.approvalStatus !== "approved") {
+      setQcMessages((current) => ({ ...current, [shot.id]: "먼저 이 Scene의 9:16 기준 이미지를 확인하고 승인해 주세요." }));
+      return;
+    }
+    const currentGeneration = generations[shot.id];
+    const previousShot = previousShotInSameScene(shot.id);
+    const previousGeneration = previousShot ? generations[previousShot.id] : undefined;
+    let continuityFrame = "";
+    let continuitySourceGenerationId = "";
+    if (previousShot) {
+      if (!previousGeneration || previousGeneration.status !== "ready" || !previousGeneration.videoUrl) {
+        setQcMessages((current) => ({ ...current, [shot.id]: `연속 생성을 위해 앞 Shot ${previousShot.id} 영상을 먼저 완성해 주세요.` }));
+        return;
+      }
+      setQcMessages((current) => ({ ...current, [shot.id]: `앞 Shot ${previousShot.id}의 마지막 프레임을 연결하고 있어요…` }));
+      try {
+        continuityFrame = await captureFinalVideoFrame(previousGeneration.videoUrl);
+        continuitySourceGenerationId = previousGeneration.id;
+      } catch (caught) {
+        setQcMessages((current) => ({
+          ...current,
+          [shot.id]: caught instanceof Error ? caught.message : "이전 Shot의 마지막 프레임을 준비하지 못했습니다.",
+        }));
+        return;
+      }
+    }
+    rememberGenerationVersion(shot.id, generations[shot.id]);
     setGenerations((current) => ({
       ...current,
       [shot.id]: {
         id: "",
+        episodeId,
         shotId: shot.id,
+        model: "",
+        provider: videoProvider,
+        ltxPreset: ltxPresetForShot(shot),
+        backendStatus: videoProvider === "ltx" ? "B200 연결 중" : "Google 연결 중",
+        prompt: shot.prompt,
+        continuitySourceGenerationId,
+        initialFrameKind: "",
         status: "generating",
         durationSeconds: 6,
+        aspectRatio: format === "reels" ? "9:16" : "16:9",
         usedReferenceIds: [],
         omittedReferenceIds: [],
         error: "",
@@ -237,10 +683,17 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          episodeId,
+          sceneId: shotScene.id,
           shotId: shot.id,
           prompt: shot.prompt,
           estimatedSeconds: shot.estimatedSeconds,
           referenceIds: shot.referenceIds,
+          provider: videoProvider,
+          ltxPreset: ltxPresetForShot(shot),
+          continuityFrame,
+          continuitySourceGenerationId,
+          sceneMasterGenerationId: currentGeneration?.initialFrameKind === "scene_master" ? currentGeneration.id : "",
         }),
       });
       const startBody = (await startResponse.json()) as GenerationApiResponse;
@@ -258,9 +711,18 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
         [shot.id]: {
           ...(current[shot.id] || {}),
           id: current[shot.id]?.id || "",
+          episodeId: current[shot.id]?.episodeId || episodeId,
           shotId: shot.id,
+          model: current[shot.id]?.model || "",
+          provider: current[shot.id]?.provider || videoProvider,
+          ltxPreset: current[shot.id]?.ltxPreset || ltxPresetForShot(shot),
+          backendStatus: current[shot.id]?.backendStatus || "",
+          prompt: current[shot.id]?.prompt || shot.prompt,
+          continuitySourceGenerationId: current[shot.id]?.continuitySourceGenerationId || continuitySourceGenerationId,
+          initialFrameKind: current[shot.id]?.initialFrameKind || "",
           status: "failed",
           durationSeconds: current[shot.id]?.durationSeconds || 6,
+          aspectRatio: current[shot.id]?.aspectRatio || (format === "reels" ? "9:16" : "16:9"),
           usedReferenceIds: current[shot.id]?.usedReferenceIds || [],
           omittedReferenceIds: current[shot.id]?.omittedReferenceIds || [],
           error: caught instanceof Error ? caught.message : "영상 생성 중 문제가 생겼습니다.",
@@ -274,6 +736,80 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
           qc: current[shot.id]?.qc || null,
         },
       }));
+    }
+  }
+
+  async function reviseAndRegenerate(sceneId: string, shot: DirectorPlan["scenes"][number]["shots"][number]) {
+    const instruction = (revisionText[shot.id] || "").trim();
+    if (!plan || instruction.length < 2 || revisionPendingShots.has(shot.id)) return;
+    setRevisionPendingShots((current) => new Set(current).add(shot.id));
+    setQcMessages((current) => ({ ...current, [shot.id]: "" }));
+    try {
+      const reviseResponse = await fetch("/api/shots/revise", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPrompt: shot.prompt, instruction, action: shot.action, startState: shot.startState, endState: shot.endState }),
+      });
+      const reviseBody = (await reviseResponse.json()) as { prompt?: string; error?: string; requestId?: string };
+      if (!reviseResponse.ok || !reviseBody.prompt) {
+        throw new Error(`${reviseBody.error || "수정 프롬프트를 만들지 못했습니다."}${reviseBody.requestId ? ` (문의 번호: ${reviseBody.requestId})` : ""}`);
+      }
+      const revisedShot = { ...shot, prompt: reviseBody.prompt };
+      const revisedPlan: DirectorPlan = {
+        ...plan,
+        scenes: plan.scenes.map((scene) => scene.id !== sceneId ? scene : {
+          ...scene,
+          shots: scene.shots.map((item) => item.id === shot.id ? revisedShot : item),
+        }),
+      };
+      const saveResponse = await fetch(`/api/episodes/${episodeId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: revisedPlan }),
+      });
+      if (!saveResponse.ok) throw new Error("수정 프롬프트를 Episode에 저장하지 못했습니다.");
+      setPlan(revisedPlan);
+      setRevisionText((current) => ({ ...current, [shot.id]: "" }));
+      await generateShot(revisedShot);
+    } catch (caught) {
+      setQcMessages((current) => ({ ...current, [shot.id]: caught instanceof Error ? caught.message : "영상 수정 중 문제가 생겼습니다." }));
+    } finally {
+      setRevisionPendingShots((current) => {
+        const next = new Set(current);
+        next.delete(shot.id);
+        return next;
+      });
+    }
+  }
+
+  async function restoreGenerationVersion(sceneId: string, shot: DirectorPlan["scenes"][number]["shots"][number], version: ShotGenerationView) {
+    if (!plan || !episodeId) return;
+    setQcMessages((current) => ({ ...current, [shot.id]: "" }));
+    try {
+      const response = await fetch(`/api/episodes/${episodeId}/generations`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shotId: shot.id, generationId: version.id }),
+      });
+      const body = (await response.json()) as GenerationApiResponse;
+      if (!response.ok || !body.generation) throw new Error(apiError(body, "이전 영상 버전을 복원하지 못했습니다."));
+      rememberGenerationVersion(shot.id, generations[shot.id]);
+      setGenerations((current) => ({ ...current, [shot.id]: body.generation as ShotGenerationView }));
+      const restoredPlan: DirectorPlan = {
+        ...plan,
+        scenes: plan.scenes.map((scene) => scene.id !== sceneId ? scene : {
+          ...scene,
+          shots: scene.shots.map((item) => item.id === shot.id ? { ...item, prompt: version.prompt } : item),
+        }),
+      };
+      setPlan(restoredPlan);
+      await fetch(`/api/episodes/${episodeId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: restoredPlan }),
+      });
+    } catch (caught) {
+      setQcMessages((current) => ({ ...current, [shot.id]: caught instanceof Error ? caught.message : "이전 영상 버전을 복원하지 못했습니다." }));
     }
   }
 
@@ -304,8 +840,12 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
   return (
     <main className="page-shell studio-page">
       <header className="studio-header">
-        <div className="brand"><span className="brand-mark" aria-hidden="true">✦</span> Animation Studio</div>
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">✦</span>
+          <span className="brand-name">Animation Studio</span>
+        </div>
         <div className="header-actions">
+          <Link className="quiet-button nav-link" href="/episodes">지난 이야기</Link>
           <Link className="quiet-button nav-link" href="/references">자료실</Link>
           <button className="quiet-button" type="button" onClick={logout}>나가기</button>
         </div>
@@ -332,8 +872,49 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
           maxLength={12000}
           disabled={pending}
         />
-        <div className="story-helper"><span>길게 적어도 괜찮아요</span><span>{story.length.toLocaleString()} / 12,000</span></div>
-        <button className="primary-button" type="submit" disabled={story.trim().length < 10 || pending}>
+        <div className="story-helper"><span>글이나 스토리보드 이미지로 알려주세요</span><span>{story.length.toLocaleString()} / 12,000</span></div>
+        <fieldset className="format-selector" disabled={pending}>
+          <legend>완성 영상 형식</legend>
+          <label className={format === "reels" ? "selected" : ""}>
+            <input type="radio" name="episode-format" value="reels" checked={format === "reels"} onChange={() => setFormat("reels")} />
+            <span><strong>인스타 릴스</strong><small>9:16 세로 · Scene 이미지 먼저 확인</small></span>
+          </label>
+          <label className={format === "landscape" ? "selected" : ""}>
+            <input type="radio" name="episode-format" value="landscape" checked={format === "landscape"} onChange={() => setFormat("landscape")} />
+            <span><strong>가로 영상</strong><small>16:9 · 기존 방식</small></span>
+          </label>
+        </fieldset>
+        {storyboardInputs.length || pendingStoryboards.length ? (
+          <div className="storyboard-preview-grid" aria-label="첨부한 스토리보드 이미지">
+            {storyboardInputs.map((input) => (
+              <div className="storyboard-preview" key={input.id}>
+                <Image src={input.imageUrl} alt={input.name} fill sizes="120px" unoptimized />
+                <button type="button" aria-label={`${input.name} 삭제`} disabled={pending} onClick={() => setStoryboardInputs((current) => current.filter((item) => item.id !== input.id))}>×</button>
+              </div>
+            ))}
+            {pendingStoryboards.map((input) => (
+              <div className="storyboard-preview" key={input.key}>
+                <Image src={input.previewUrl} alt={input.file.name} fill sizes="120px" unoptimized />
+                <button type="button" aria-label={`${input.file.name} 삭제`} disabled={pending} onClick={() => removePendingStoryboard(input.key)}>×</button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <label className={`storyboard-add-button${storyboardInputs.length + pendingStoryboards.length >= MAX_STORYBOARD_IMAGES ? " disabled" : ""}`} htmlFor="storyboard-files">
+          <span aria-hidden="true">＋</span>
+          <strong>스토리보드 이미지 추가</strong>
+          <small>JPG, PNG, WebP · 최대 3장</small>
+        </label>
+        <input
+          className="visually-hidden"
+          id="storyboard-files"
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          multiple
+          disabled={pending || storyboardInputs.length + pendingStoryboards.length >= MAX_STORYBOARD_IMAGES}
+          onChange={(event) => { selectStoryboardFiles(event.target.files); event.currentTarget.value = ""; }}
+        />
+        <button className="primary-button" type="submit" disabled={(story.trim().length < 10 && storyboardInputs.length + pendingStoryboards.length === 0) || pending}>
           {pending ? <><span className="button-spinner" aria-hidden="true" />이야기 구성 중…</> : "전체 이야기 만들기"}
         </button>
         {pending ? <p className="phase-note" role="status">AI Director가 상황별 Scene과 한 가지 행동 중심의 Shot을 구성하고 있어요.</p> : null}
@@ -346,12 +927,40 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
             <p className="eyebrow">DIRECTOR PLAN</p>
             <h2 id="episode-plan-title">{plan.title}</h2>
             <p>{plan.summary}</p>
+            <p className="episode-format-badge">{format === "reels" ? "인스타 릴스 · 9:16 세로" : "가로 영상 · 16:9"}</p>
+            <p className="identity-standard"><span aria-hidden="true">✓</span> 고정 Visual Bible: 모든 Master Reference 그대로 유지</p>
+            {episodeId ? <Link className="episode-saved-link" href={`/episodes/${episodeId}`}>저장된 Episode 보기</Link> : null}
           </div>
           <div className="plan-metrics" aria-label="이야기 구성 요약">
             <div><strong>{plan.scenes.length}</strong><span>Scenes</span></div>
             <div><strong>{plan.totalShots}</strong><span>Video Shots</span></div>
             <div><strong>{formatDuration(plan.totalEstimatedSeconds)}</strong><span>예상 완성 길이</span></div>
           </div>
+
+          <fieldset className="video-provider-selector">
+            <legend>영상 생성 엔진</legend>
+            <label className={videoProvider === "ltx" ? "selected" : ""}>
+              <input type="radio" name="video-provider" value="ltx" checked={videoProvider === "ltx"} onChange={() => setVideoProvider("ltx")} />
+              <span><strong>B200 · LTX-2.5</strong><small>우리 서버 오픈 모델 · 레퍼런스 그림체 우선</small></span>
+            </label>
+            <label className={videoProvider === "google" ? "selected" : ""}>
+              <input type="radio" name="video-provider" value="google" checked={videoProvider === "google"} onChange={() => setVideoProvider("google")} />
+              <span><strong>Google 영상</strong><small>B200 점검 시 사용할 백업 엔진</small></span>
+            </label>
+          </fieldset>
+
+          {format === "reels" ? (
+            <section className="reels-frame-overview" aria-label="릴스 Scene 이미지 준비 상태">
+              <div>
+                <strong>먼저 Scene 이미지를 확인해 주세요</strong>
+                <span>{Object.values(sceneFrames).filter((frame) => frame.approvalStatus === "approved").length} / {plan.scenes.length} 승인</span>
+              </div>
+              <p>가족 얼굴과 그림체를 이미지 단계에서 고친 뒤 승인한 Scene만 영상으로 만들 수 있습니다.</p>
+              <button type="button" disabled={allSceneFramesPending || plan.scenes.every((scene) => Boolean(sceneFrames[scene.id]))} onClick={() => void generateMissingSceneFrames()}>
+                {allSceneFramesPending ? <><span className="button-spinner" aria-hidden="true" />Scene 이미지 준비 중…</> : "없는 Scene 이미지 모두 만들기"}
+              </button>
+            </section>
+          ) : null}
 
           <div className="scene-list">
             {plan.scenes.map((scene) => (
@@ -383,21 +992,80 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
                   {scene.sceneMasterReferenceId && referenceById.get(scene.sceneMasterReferenceId) ? (
                     <p className="master-reference">Scene 기준 이미지 · {referenceById.get(scene.sceneMasterReferenceId)?.name}</p>
                   ) : null}
+                  {format === "reels" ? (
+                    <section className={`scene-frame-card${sceneFrames[scene.id]?.approvalStatus === "approved" ? " approved" : ""}`} aria-label={`Scene ${scene.number} 세로 기준 이미지`}>
+                      <div className="scene-frame-heading">
+                        <div><span>9:16 SCENE FRAME</span><strong>영상 시작 이미지</strong></div>
+                        <span className={`scene-frame-state ${sceneFrames[scene.id]?.approvalStatus || "empty"}`}>
+                          {sceneFrames[scene.id]?.approvalStatus === "approved" ? "승인 완료" : sceneFrames[scene.id] ? "확인 필요" : "이미지 전"}
+                        </span>
+                      </div>
+                      {sceneFrames[scene.id] ? (
+                        <div className="scene-frame-image">
+                          <Image
+                            src={`/api/episodes/${episodeId}/scenes/${scene.id}/frame?v=${sceneFrames[scene.id].id}`}
+                            alt={`${scene.title} 세로 기준 이미지`}
+                            fill
+                            sizes="(max-width: 640px) 88vw, 420px"
+                            unoptimized
+                          />
+                        </div>
+                      ) : (
+                        <div className="scene-frame-empty"><span aria-hidden="true">✦</span><p>가족 레퍼런스로 세로 장면을 먼저 만듭니다.</p></div>
+                      )}
+                      {pendingSceneFrames.has(scene.id) ? <p className="qc-progress" role="status"><span className="button-spinner" aria-hidden="true" />가족 모습과 그림체를 맞춰 Scene 이미지를 만들고 있어요…</p> : null}
+                      <label className="scene-frame-revision" htmlFor={`scene-frame-${scene.id}`}>
+                        <span>{sceneFrames[scene.id] ? "어떻게 바꿀까요?" : "이미지에 원하는 점이 있나요?"}</span>
+                        <textarea
+                          id={`scene-frame-${scene.id}`}
+                          placeholder="예: 아이를 조금 더 작게, 곰인형은 아이 몸통만큼 크게 보여주세요."
+                          value={sceneFrameInstructions[scene.id] || ""}
+                          maxLength={500}
+                          disabled={pendingSceneFrames.has(scene.id)}
+                          onChange={(event) => setSceneFrameInstructions((current) => ({ ...current, [scene.id]: event.target.value }))}
+                        />
+                      </label>
+                      <div className="scene-frame-actions">
+                        <button type="button" disabled={pendingSceneFrames.has(scene.id)} onClick={() => void generateSceneFrame(scene.id)}>
+                          {sceneFrames[scene.id] ? "수정해서 다시 만들기" : "Scene 이미지 만들기"}
+                        </button>
+                        {sceneFrames[scene.id] ? (
+                          <button className="approve" type="button" disabled={pendingSceneFrames.has(scene.id)} onClick={() => void approveSceneFrame(scene.id, sceneFrames[scene.id].approvalStatus !== "approved")}>
+                            {sceneFrames[scene.id].approvalStatus === "approved" ? "승인 취소" : "이 이미지 승인"}
+                          </button>
+                        ) : null}
+                      </div>
+                      {sceneFrameMessages[scene.id] ? <p className="feedback compact-feedback" role="alert">{sceneFrameMessages[scene.id]}</p> : null}
+                      {sceneFrames[scene.id]?.approvalStatus === "approved" ? <p className="scene-frame-ready">이 이미지가 첫 Shot의 정확한 시작 화면으로 사용됩니다.</p> : null}
+                    </section>
+                  ) : null}
                   <div className="shot-list">
-                    {scene.shots.map((shot) => {
+                    {scene.shots.map((shot, shotIndex) => {
                       const generation = generations[shot.id];
+                      const previousGeneration = shotIndex > 0 ? generations[scene.shots[shotIndex - 1].id] : undefined;
+                      const continuityIsStale = Boolean(
+                        generation?.continuitySourceGenerationId &&
+                        previousGeneration?.id &&
+                        generation.continuitySourceGenerationId !== previousGeneration.id,
+                      );
+                      const previousVersions = (generationVersions[shot.id] || [])
+                        .filter((version) => version.id !== generation?.id && version.status === "ready")
+                        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
                       const selectedReferences = shot.referenceIds
                         .map((id) => referenceById.get(id))
                         .filter((reference): reference is DirectorReference => Boolean(reference));
+                      const referenceDraft = referenceDrafts[shot.id] || shot.referenceIds;
                       return (
-                        <article className="shot-card" key={shot.id}>
+                        <article className="shot-card" id={`shot-${shot.id}`} key={shot.id}>
                           <div className="shot-heading">
                             <div>
                               <span className="shot-number">SHOT {shot.id}</span>
                               <h3>{shot.title}</h3>
                             </div>
                             <div className="shot-badges">
-                              {generation ? <span className={`model-tier ${generation.qualityTier}`}>{generation.qualityTier === "fast" ? "FAST" : "STANDARD"}</span> : null}
+                              {generation ? <span className={`model-tier ${generation.provider === "ltx" ? "ltx" : generation.model.includes("omni") ? "omni" : generation.qualityTier}`}>{generation.provider === "ltx" ? "LTX-2.5" : generation.model.includes("omni") ? "OMNI" : generation.qualityTier === "fast" ? "FAST" : "STANDARD"}</span> : null}
+                              {generation?.continuitySourceGenerationId ? <span className={`continuity-badge${continuityIsStale ? " stale" : ""}`}>{continuityIsStale ? "연결 다시 필요" : "이전 프레임 연결"}</span> : null}
+                              {generation?.initialFrameKind === "scene_master" ? <span className="continuity-badge">2D Scene 기준 프레임</span> : null}
                               <span className="shot-duration">{shot.estimatedSeconds}초</span>
                             </div>
                           </div>
@@ -408,23 +1076,62 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
                             <span><b>끝</b>{shot.endState}</span>
                           </div>
                           <div className="shot-references">
-                            <span className="meta-label">Reference</span>
+                            <span className="meta-label">고정 기준</span>
                             {selectedReferences.length ? selectedReferences.map((reference) => (
                               <span className="reference-pill" key={reference.id}>{reference.category} · {reference.name}</span>
-                            )) : <span className="no-reference">텍스트로 생성</span>}
+                            )) : <span className="no-reference">직접 전달 이미지 없음</span>}
                           </div>
                           {shot.referenceReason ? <p className="reference-reason">{shot.referenceReason}</p> : null}
+                          <button className="reference-change-button" type="button" onClick={() => openReferenceEditor(shot.id, shot.referenceIds)}>
+                            {referenceEditorShotId === shot.id ? "고정 기준 선택 닫기" : "고정 기준 직접 선택·변경"}
+                          </button>
+                          {referenceEditorShotId === shot.id ? (
+                            <section className="shot-reference-editor" aria-label={`Shot ${shot.id} 고정 기준 선택`}>
+                              <div className="shot-reference-editor-heading">
+                                <strong>자료실에서 최대 6장 선택</strong>
+                                <span>{referenceDraft.length} / 6</span>
+                              </div>
+                              <div className="shot-reference-options">
+                                {references.map((reference) => {
+                                  const checked = referenceDraft.includes(reference.id);
+                                  return (
+                                    <label className={checked ? "selected" : ""} key={reference.id}>
+                                      <input type="checkbox" checked={checked} onChange={() => toggleShotReference(shot.id, reference.id)} />
+                                      <span className="shot-reference-thumbnail">
+                                        <Image src={`/api/references/${reference.id}/image`} alt="" fill sizes="54px" unoptimized />
+                                      </span>
+                                      <span><b>{reference.name}</b><small>{reference.category}</small></span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                              <div className="shot-reference-editor-actions">
+                                <button type="button" onClick={() => setReferenceEditorShotId("")}>취소</button>
+                                <button type="button" disabled={referenceSavingShotIds.has(shot.id)} onClick={() => void saveShotReferences(scene.id, shot.id)}>
+                                  {referenceSavingShotIds.has(shot.id) ? "저장 중…" : "이 선택으로 저장"}
+                                </button>
+                              </div>
+                            </section>
+                          ) : null}
                           <details className="prompt-panel">
                             <summary>프롬프트 보기·수정</summary>
                             <textarea
                               aria-label={`Shot ${shot.id} 프롬프트`}
                               value={shot.prompt}
                               onChange={(event) => updatePrompt(scene.id, shot.id, event.target.value)}
+                              onBlur={() => void saveCurrentPlan()}
                             />
                           </details>
                           {generation?.status === "ready" ? (
                             <div className="shot-video-result">
-                              <video controls playsInline preload="metadata" src={generation.videoUrl} />
+                              <video className={generation.aspectRatio === "9:16" ? "portrait-video" : undefined} controls playsInline preload="metadata" src={generation.videoUrl} />
+                              <a
+                                className="video-download-primary"
+                                href={`${generation.videoUrl}?download=1`}
+                                download={`family-animation-${shot.id}.mp4`}
+                              >
+                                영상 다운로드
+                              </a>
                               {qcPendingShots.has(shot.id) ? (
                                 <p className="qc-progress" role="status"><span className="button-spinner" aria-hidden="true" />GPT가 영상 품질을 검수하고 있어요…</p>
                               ) : null}
@@ -447,34 +1154,75 @@ export function Studio({ environmentReady }: { environmentReady: boolean }) {
                                     <span>연결성 <b>{generation.qc.scores.continuity}</b></span>
                                   </div>
                                   <p>{generation.qc.summary}</p>
-                                  {generation.autoRegenerationCount ? <p className="qc-attempt">Standard 자동 보정 {generation.autoRegenerationCount}/2회</p> : null}
+                                  {generation.autoRegenerationCount ? <p className="qc-attempt">고정 기준 자동 보정 {generation.autoRegenerationCount}/2회</p> : null}
                                 </section>
                               ) : null}
+                              <section className="video-revision-panel" aria-label={`Shot ${shot.id} 영상 수정`}>
+                                <label htmlFor={`revision-${shot.id}`}>
+                                  {generation.approvalStatus === "approved" ? "승인 완료 · 그래도 수정할 수 있어요" : "어떻게 바꿀까요?"}
+                                </label>
+                                <textarea
+                                  id={`revision-${shot.id}`}
+                                  placeholder="예: 아이 표정을 더 밝게 하고 카메라를 조금 더 가까이 보여주세요."
+                                  value={revisionText[shot.id] || ""}
+                                  maxLength={500}
+                                  disabled={revisionPendingShots.has(shot.id)}
+                                  onChange={(event) => setRevisionText((current) => ({ ...current, [shot.id]: event.target.value }))}
+                                />
+                                <div>
+                                  <small>{generation.approvalStatus === "approved" ? "승인 영상은 그대로 보관하고 수정본을 새로 만듭니다." : "현재 영상은 이전 버전으로 보관됩니다."}</small>
+                                  <button
+                                    type="button"
+                                    disabled={(revisionText[shot.id] || "").trim().length < 2 || revisionPendingShots.has(shot.id)}
+                                    onClick={() => reviseAndRegenerate(scene.id, shot)}
+                                  >
+                                    {revisionPendingShots.has(shot.id) ? "수정 준비 중…" : generation.approvalStatus === "approved" ? "승인본 유지하고 수정본 만들기" : "수정해서 새 영상 만들기"}
+                                  </button>
+                                </div>
+                              </section>
                               {qcMessages[shot.id] ? <p className="feedback compact-feedback" role="alert">{qcMessages[shot.id]}</p> : null}
                               <div className="video-actions">
-                                <a className="small-action nav-link" href={`${generation.videoUrl}?download=1`}>파일 저장</a>
                                 {generation.approvalStatus !== "approved" ? (
                                   <button className="small-action" type="button" onClick={() => approveShot(shot.id, generation)}>이대로 승인</button>
                                 ) : null}
-                                <button className="small-action" type="button" onClick={() => generateShot(shot)}>Fast로 다시 생성</button>
+                                <button className="small-action" type="button" disabled={format === "reels" && sceneFrames[scene.id]?.approvalStatus !== "approved"} onClick={() => generateShot(shot)}>{videoProvider === "ltx" ? "LTX로 다시 생성" : selectedReferences.length ? "고정 기준으로 다시 생성" : "Fast로 다시 생성"}</button>
                                 {!generation.qc && !qcPendingShots.has(shot.id) ? (
                                   <button className="small-action" type="button" onClick={() => runQcCycle(shot, generation)}>검수 다시 시도</button>
                                 ) : null}
                               </div>
+                              {previousVersions.length ? (
+                                <details className="video-version-history">
+                                  <summary>이전 영상 {previousVersions.length}개 보기</summary>
+                                  <div className="video-version-list">
+                                    {previousVersions.map((version, index) => (
+                                      <article key={version.id}>
+                                        <div><strong>이전 버전 {previousVersions.length - index}</strong><span>{version.provider === "ltx" ? "LTX-2.5" : version.model.includes("omni") ? "OMNI" : version.qualityTier.toUpperCase()} · {version.qc ? `QC ${version.qc.overall}` : "QC 없음"}</span></div>
+                                        <video className={version.aspectRatio === "9:16" ? "portrait-video" : undefined} controls playsInline preload="metadata" src={version.videoUrl} />
+                                        <button type="button" onClick={() => restoreGenerationVersion(scene.id, shot, version)}>이 버전으로 복원</button>
+                                      </article>
+                                    ))}
+                                  </div>
+                                </details>
+                              ) : null}
                             </div>
                           ) : (
                             <button
                               className="shot-generate-button"
                               type="button"
-                              disabled={generation?.status === "generating" || !shot.prompt.trim()}
+                              disabled={generation?.status === "generating" || !shot.prompt.trim() || (format === "reels" && sceneFrames[scene.id]?.approvalStatus !== "approved")}
                               onClick={() => generateShot(shot)}
                             >
-                              {generation?.status === "generating" ? <><span className="button-spinner" aria-hidden="true" />{generation.qualityTier === "standard" ? "Standard 보정 생성 중…" : "Fast 영상 생성 중…"}</> : generation?.status === "failed" ? "다시 생성" : "영상 만들기"}
+                              {generation?.status === "generating" ? <><span className="button-spinner" aria-hidden="true" />{generation.provider === "ltx" ? generation.backendStatus || "B200 LTX 영상 생성 중…" : selectedReferences.length ? "고정 기준 영상 생성 중…" : generation.qualityTier === "standard" ? "Standard 보정 생성 중…" : "Fast 영상 생성 중…"}</> : generation?.status === "failed" ? "다시 생성" : videoProvider === "ltx" ? "LTX 영상 만들기" : "영상 만들기"}
                             </button>
                           )}
-                          {qcPendingShots.has(shot.id) && generation?.status === "generating" ? <p className="generation-note">QC 결과에 따라 Standard 보정 영상을 만들고 있어요.</p> : null}
+                          {format === "reels" && sceneFrames[scene.id]?.approvalStatus !== "approved" ? <p className="generation-note">Scene 이미지를 승인하면 영상 만들기 버튼이 열립니다.</p> : null}
+                          {qcPendingShots.has(shot.id) && generation?.status === "generating" ? <p className="generation-note">QC 결과에 따라 고정 기준 보정 영상을 만들고 있어요.</p> : null}
                           {generation?.omittedReferenceIds.length ? (
-                            <p className="generation-note">현재 Veo 사람 이미지 정책에 따라 일부 Reference를 제외하고 생성합니다.</p>
+                            <p className="generation-note">
+                              {selectedReferences.some((reference) => reference.category === "아이")
+                                ? "아이 Shot은 Veo 정책상 아이 이미지를 직접 전달하지 않지만, 얼굴·머리·체형·의상·그림체는 Master Reference 고정 조건으로 적용됩니다."
+                                : "직접 전달할 수 없는 이미지는 분석된 모든 시각 특징을 고정 조건으로 적용합니다."}
+                            </p>
                           ) : null}
                           {generation?.status === "failed" && generation.error ? <p className="feedback compact-feedback" role="alert">{generation.error}</p> : null}
                         </article>
