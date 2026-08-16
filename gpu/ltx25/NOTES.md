@@ -37,6 +37,9 @@ The start, middle, and end frames preserve the child, large teddy bear, living-r
   operating level (about 95.9 GiB used).
 - Because the resident path requires A.X to release GPU memory, it is opt-in, rejects mode changes
   while jobs are active, and automatically restores A.X after ten idle minutes.
+- 2026-08-17 duration update: new jobs accept only 5 or 10 seconds; an authenticated 4-second
+  submission was rejected with HTTP 400. A resident 10-second 9:16 preview completed in 80 seconds
+  and produced an 832,440-byte MP4 with a measured duration of 10.041667 seconds.
 
 ## Compatibility decisions
 
