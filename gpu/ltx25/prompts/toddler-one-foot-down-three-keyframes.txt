@@ -1,0 +1,5 @@
+A warm Korean family storybook animation in one continuous five-second shot. Follow the three supplied keyframes in their exact order. Preserve the same hand-painted 2D facial linework, skin texture, identities, hairstyles, clothing, body proportions, teddy bear, bedroom, bed geometry, bedding, lamp, furniture, camera, and amber lighting.
+
+The small three-year-old toddler begins seated at the mattress edge while hugging the teddy bear. The father kneels beside him and securely supports his waist and upper back. The child lowers one bare foot until it firmly touches the wooden floor, then lowers the second foot and gently transfers his weight to stand. The child never jumps, floats, pauses, or teleports. The teddy bear remains held against the child's torso. The mother remains asleep and unchanged. End exactly in the supplied final-frame pose.
+
+One continuous physically plausible toddler movement, fixed camera, no cut, no duplicate person, no extra limbs, no distorted hands or feet, no body morphing, no bed deformation, no style change, no text.
