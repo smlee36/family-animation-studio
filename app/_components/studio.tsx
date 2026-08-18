@@ -51,7 +51,7 @@ type LtxBatchModeView = {
   enabled: boolean;
   state: "off" | "starting" | "ready" | "restoring" | "error";
   residentReady: boolean;
-  axRunning: boolean;
+  standbyRunning: boolean;
   idleRestoreSeconds: number;
   message: string;
 };

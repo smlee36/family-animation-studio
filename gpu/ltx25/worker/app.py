@@ -144,7 +144,7 @@ def batch_status() -> dict:
         "enabled": bool(state["enabled"]),
         "state": state["state"],
         "residentReady": RESIDENT_SOCKET.exists() and process_running("resident_runner.py"),
-        "axRunning": process_running("vllm.entrypoints.openai.api_server"),
+        "standbyRunning": process_running("vllm.entrypoints.openai.api_server"),
         "idleRestoreSeconds": int(state["idle_restore_seconds"]),
         "message": state["message"],
     }
