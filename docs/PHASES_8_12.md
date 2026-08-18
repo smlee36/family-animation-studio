@@ -27,6 +27,7 @@
 - LTX, Wan, Qwen Image는 각각 독립 대기열과 상태·결과 API를 가집니다.
 - Wan 118GB 가중치는 `/NHNHOME/.family-animation-models`의 로컬 NVMe 캐시를 우선 사용해 네트워크 스토리지의 반복 로딩 병목을 피합니다.
 - Wan은 B200 180GB에서 CPU offload를 끄고 실행하며, 16fps 기준 5초 81프레임·10초 161프레임으로 생성합니다.
+- Wan 첫 미리보기는 20단계, QC 보정·최종 생성은 40단계로 실행해 속도와 품질을 분리합니다.
 
 ## Phase 12 — 운영 전환
 
@@ -45,4 +46,5 @@ Feature Flag는 이 순서를 지키기 위해 기본적으로 안전한 값으�
 - Qwen-Image-Edit-2511: 레퍼런스 1장으로 1664×928 이미지 생성 성공, 약 3분 14초
 - Qwen 자동 복구: 이미지/Wan 작업 종료 후 `/v1/models` 200 응답 확인
 - Production 모바일: 390×844에서 로그인, Episode 이력, Studio 자동 선택 UI 확인; 가로 overflow 없음
-- Wan 2.2: 로컬 NVMe·GPU 상주 최적화 후 5초 실생성 검증 중이며, 성공 전까지 Hybrid Router는 Shadow Mode 유지
+- Wan 2.2: 로컬 NVMe·GPU 상주 최적화 후 5.06초(81프레임, 16fps, 1280×704) 실생성 성공. 40단계 추론 18분 45초, 모델 적재 포함 약 22분
+- Wan 결과 프레임 10개 확인: 인물 3명과 곰인형의 중복 없이 구도·그림체가 유지되어 Hybrid Router 운영 전환 가능 판정

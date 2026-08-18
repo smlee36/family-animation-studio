@@ -60,6 +60,7 @@ export async function startWanGeneration(input: {
   shotId: string;
   prompt: string;
   estimatedSeconds: number;
+  qualityTier?: "fast" | "standard";
   referenceIds: string[];
   autoRegenerationCount?: number;
   parentGenerationId?: string;
@@ -99,7 +100,7 @@ export async function startWanGeneration(input: {
     error: "",
     createdAt: now,
     updatedAt: now,
-    qualityTier: "standard",
+    qualityTier: input.qualityTier || "fast",
     autoRegenerationCount: Math.min(2, Math.max(0, input.autoRegenerationCount || 0)),
     parentGenerationId: input.parentGenerationId || "",
     approvalStatus: "pending",
@@ -130,6 +131,7 @@ export async function startWanGeneration(input: {
     form.set("prompt", record.prompt);
     form.set("aspect_ratio", aspectRatio);
     form.set("duration_seconds", String(durationSeconds));
+    form.set("sample_steps", record.qualityTier === "standard" ? "40" : "20");
     form.set("seed", "42");
     form.set("image", new Blob([new Uint8Array(startFrame.bytes)], { type: startFrame.mimeType }), "start-image");
     const response = await fetch(`${baseUrl}/jobs`, {

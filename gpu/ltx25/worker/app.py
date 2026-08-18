@@ -860,6 +860,7 @@ async def create_wan_job(
     prompt: str = Form(...),
     aspect_ratio: Literal["16:9", "9:16"] = Form("9:16"),
     duration_seconds: int = Form(5),
+    sample_steps: int = Form(20),
     seed: int = Form(42),
     image: UploadFile = File(...),
 ) -> dict:
@@ -867,6 +868,8 @@ async def create_wan_job(
         raise HTTPException(status_code=400, detail="Invalid Wan request")
     if duration_seconds not in {5, 10}:
         raise HTTPException(status_code=400, detail="Invalid Wan duration")
+    if sample_steps not in {20, 40}:
+        raise HTTPException(status_code=400, detail="Invalid Wan sample steps")
     if wan_metadata_path(job_id).is_file():
         return load_wan_job(job_id)
     content_type = (image.content_type or "").lower()
@@ -891,8 +894,8 @@ async def create_wan_job(
         shutil.rmtree(directory, ignore_errors=True)
         raise
     timestamp = now_iso()
-    estimated_seconds = 1_800 if duration_seconds == 5 else 2_700
-    job = {"id": job_id, "status": "queued", "stage": "Wan 대기열에 등록됨", "prompt": prompt.strip(), "aspect_ratio": aspect_ratio, "duration_seconds": duration_seconds, "seed": seed, "input_filename": destination.name, "model": "Wan 2.2 I2V-A14B", "error": "", "created_at": timestamp, "updated_at": timestamp, "started_at": "", "completed_at": "", "estimated_seconds_remaining": estimated_seconds, "queue_position": wan_queue.qsize()}
+    estimated_seconds = (1_200 if sample_steps == 20 else 1_800) if duration_seconds == 5 else (1_800 if sample_steps == 20 else 2_700)
+    job = {"id": job_id, "status": "queued", "stage": "Wan 대기열에 등록됨", "prompt": prompt.strip(), "aspect_ratio": aspect_ratio, "duration_seconds": duration_seconds, "sample_steps": sample_steps, "seed": seed, "input_filename": destination.name, "model": "Wan 2.2 I2V-A14B", "error": "", "created_at": timestamp, "updated_at": timestamp, "started_at": "", "completed_at": "", "estimated_seconds_remaining": estimated_seconds, "queue_position": wan_queue.qsize()}
     save_wan_job(job)
     wan_queue.put(job_id)
     return job
@@ -905,7 +908,8 @@ def get_wan_job(job_id: str) -> dict:
     job = load_wan_job(job_id)
     if job.get("status") == "running":
         elapsed = max(0, round(time.time() - parse_timestamp(job.get("started_at", ""))))
-        estimated_seconds = 1_800 if job.get("duration_seconds") == 5 else 2_700
+        preview = job.get("sample_steps", 20) == 20
+        estimated_seconds = (1_200 if preview else 1_800) if job.get("duration_seconds") == 5 else (1_800 if preview else 2_700)
         job["estimated_seconds_remaining"] = max(30, estimated_seconds - elapsed)
     elif job.get("status") not in {"queued", "running"}:
         job["estimated_seconds_remaining"] = 0

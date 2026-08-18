@@ -32,6 +32,7 @@ def main() -> None:
         "--image", str(directory / job["input_filename"]),
         "--prompt", job["prompt"],
         "--frame_num", str(frame_count),
+        "--sample_steps", str(int(job.get("sample_steps", 20))),
         "--base_seed", str(job["seed"]),
         "--save_file", str(directory / "output.mp4"),
     ]
