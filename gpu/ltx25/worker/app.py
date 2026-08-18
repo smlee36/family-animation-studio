@@ -150,14 +150,14 @@ def batch_status() -> dict:
     }
 
 
-def stop_ax_service() -> None:
+def stop_standby_service() -> None:
     AX_PAUSE_FILE.touch(mode=0o600, exist_ok=True)
     subprocess.run(["pkill", "-f", "vllm.entrypoints.openai.api_server"], check=False)
     for _ in range(60):
         if not process_running("vllm.entrypoints.openai.api_server"):
             return
         time.sleep(1)
-    raise RuntimeError("A.X service did not stop within 60 seconds")
+    raise RuntimeError("Qwen 235B service did not stop within 60 seconds")
 
 
 def start_resident_runner() -> None:
@@ -212,7 +212,7 @@ def stop_resident_runner() -> None:
     resident_process = None
 
 
-def ax_healthy() -> bool:
+def standby_healthy() -> bool:
     if not process_running("vllm.entrypoints.openai.api_server"):
         return False
     token = AX_TOKEN_FILE.read_text(encoding="utf-8").strip() if AX_TOKEN_FILE.is_file() else ""
@@ -226,10 +226,10 @@ def ax_healthy() -> bool:
         return False
 
 
-def restore_ax_service() -> None:
+def restore_standby_service() -> None:
     with batch_lock:
         state = load_batch_state()
-        state.update(enabled=False, state="restoring", message="A.X 서비스를 복구하고 있어요.")
+        state.update(enabled=False, state="restoring", message="Qwen 235B 서비스를 복구하고 있어요.")
         save_batch_state(state)
         try:
             stop_resident_runner()
@@ -240,14 +240,14 @@ def restore_ax_service() -> None:
                     subprocess.Popen([str(AX_SERVE_SCRIPT)], cwd=AX_ROOT, stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True)
             AX_PAUSE_FILE.unlink(missing_ok=True)
             for _ in range(180):
-                if ax_healthy():
-                    state.update(state="off", message="일반 모드 · A.X 정상 복구", error="")
+                if standby_healthy():
+                    state.update(state="off", message="일반 모드 · Qwen 235B 정상 복구", error="")
                     save_batch_state(state)
                     return
                 time.sleep(5)
-            raise RuntimeError("A.X API did not become healthy within 15 minutes")
+            raise RuntimeError("Qwen 235B API did not become healthy within 15 minutes")
         except Exception as error:
-            state.update(state="error", message="A.X 자동 복구를 확인해 주세요.", error=str(error)[-1000:])
+            state.update(state="error", message="Qwen 235B 자동 복구를 확인해 주세요.", error=str(error)[-1000:])
         save_batch_state(state)
 
 
@@ -500,7 +500,7 @@ def batch_idle_monitor() -> None:
             continue
         last_job_at = parse_timestamp(state["last_job_at"] or state["enabled_at"])
         if time.time() - last_job_at >= int(state["idle_restore_seconds"]):
-            restore_ax_service()
+            restore_standby_service()
 
 
 def start_worker() -> None:
@@ -573,10 +573,10 @@ def set_batch_mode(payload: dict = Body(...)) -> dict:
                 save_batch_state(state)
                 return batch_status()
             timestamp = now_iso()
-            state.update(enabled=True, state="starting", message="A.X를 멈추고 LTX 전용 GPU를 준비하고 있어요.", enabled_at=timestamp, last_job_at=timestamp, error="")
+            state.update(enabled=True, state="starting", message="Qwen 235B를 멈추고 LTX 전용 GPU를 준비하고 있어요.", enabled_at=timestamp, last_job_at=timestamp, error="")
             save_batch_state(state)
             try:
-                stop_ax_service()
+                stop_standby_service()
                 start_resident_runner()
                 state.update(state="ready", message="고속 배치 모드 · LTX 전용 GPU 준비 완료")
                 save_batch_state(state)
@@ -591,8 +591,8 @@ def set_batch_mode(payload: dict = Body(...)) -> dict:
                         subprocess.Popen([str(AX_SERVE_SCRIPT)], cwd=AX_ROOT, stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True)
                 raise HTTPException(status_code=500, detail=state["message"]) from error
         return batch_status()
-    threading.Thread(target=restore_ax_service, name="ltx25-ax-restore", daemon=True).start()
-    return {**batch_status(), "enabled": False, "state": "restoring", "message": "A.X 서비스를 복구하고 있어요."}
+    threading.Thread(target=restore_standby_service, name="ltx25-qwen235-restore", daemon=True).start()
+    return {**batch_status(), "enabled": False, "state": "restoring", "message": "Qwen 235B 서비스를 복구하고 있어요."}
 
 
 @app.post("/ltx/jobs", status_code=202, dependencies=[Depends(require_token)])

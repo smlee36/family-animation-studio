@@ -1231,9 +1231,9 @@ export function Studio({
                 <span>{ltxBatchMode?.message || "필요할 때 B200를 LTX 전용으로 전환합니다."}</span>
               </div>
               <button type="button" disabled={ltxBatchPending || ltxBatchMode?.state === "starting" || ltxBatchMode?.state === "restoring"} onClick={() => void toggleLtxBatchMode()}>
-                {ltxBatchPending || ltxBatchMode?.state === "starting" ? "전환 중…" : ltxBatchMode?.state === "restoring" ? "A.X 복구 중…" : ltxBatchMode?.enabled ? "고속 모드 끄기" : "고속 모드 켜기"}
+                {ltxBatchPending || ltxBatchMode?.state === "starting" ? "전환 중…" : ltxBatchMode?.state === "restoring" ? "Qwen 235B 복구 중…" : ltxBatchMode?.enabled ? "고속 모드 끄기" : "고속 모드 켜기"}
               </button>
-              <p>A.X를 잠시 멈추고 LTX 모델을 GPU에 계속 유지합니다. 작업이 10분간 없으면 A.X가 자동으로 복구돼요.</p>
+              <p>Qwen 235B를 잠시 멈추고 LTX 모델을 GPU에 계속 유지합니다. 작업이 10분간 없으면 Qwen 235B가 자동으로 복구돼요.</p>
               {ltxBatchMessage ? <p className="ltx-batch-message">{ltxBatchMessage}</p> : null}
             </section>
           ) : null}

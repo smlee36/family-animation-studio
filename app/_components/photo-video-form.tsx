@@ -240,7 +240,7 @@ export function PhotoVideoForm() {
 
       <label className={`photo-batch-toggle${highSpeedBatch ? " selected" : ""}`}>
         <input type="checkbox" checked={highSpeedBatch} disabled={pending} onChange={(event) => setHighSpeedBatch(event.target.checked)} />
-        <span><strong>B200 고속 배치 사용</strong><small>A.X를 잠시 멈추고 LTX를 계속 GPU에 유지 · 작업 후 자동 복구</small></span>
+        <span><strong>B200 고속 배치 사용</strong><small>Qwen 235B를 잠시 멈추고 LTX를 계속 GPU에 유지 · 작업 후 자동 복구</small></span>
       </label>
 
       <button className="primary-button" type="submit" disabled={!photos.length || pending}>
