@@ -26,7 +26,9 @@ export async function POST(request: NextRequest) {
     const sceneId = typeof body.sceneId === "string" ? body.sceneId.trim() : "";
     const episodeId = typeof body.episodeId === "string" ? body.episodeId.trim() : "";
     const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-    const provider: VideoGenerationProvider = body.provider === "google" ? "google" : "ltx";
+    const provider: VideoGenerationProvider = body.provider === "google" || body.provider === "ltx" || body.provider === "wan"
+      ? body.provider
+      : "auto";
     const ltxPreset: LtxPreset = body.ltxPreset === "action" || body.ltxPreset === "camera" ? body.ltxPreset : "gentle";
     const ltxRenderMode: LtxRenderMode = body.ltxRenderMode === "final" ? "final" : "preview";
     const estimatedSeconds = typeof body.estimatedSeconds === "number" ? body.estimatedSeconds : 5;
@@ -49,7 +51,7 @@ export async function POST(request: NextRequest) {
     const aspectRatio = isReelsEpisode ? "9:16" as const : "16:9" as const;
     let keyframes: ContinuityFrameInput[] | undefined;
     if (keyframePathnames.length || keyframeMimeTypes.length) {
-      if (provider !== "ltx" || !episode || keyframePathnames.length !== 3 || keyframeMimeTypes.length !== 3) {
+      if ((provider !== "ltx" && provider !== "auto") || !episode || keyframePathnames.length !== 3 || keyframeMimeTypes.length !== 3) {
         return jsonError("연결 영상의 키프레임 정보를 확인해 주세요.", 400, requestId);
       }
       const episodeInputs = (await Promise.all((episode.storyboardInputIds || []).map((id) => getStoryInput(id))))
@@ -123,8 +125,9 @@ export async function POST(request: NextRequest) {
       ...(scene?.sceneMasterReferenceId ? [scene.sceneMasterReferenceId] : []),
       ...referenceIds,
     ])].slice(0, 6);
-    const record = await startVideoGeneration({ id: randomUUID(), episodeId, shotId, prompt, estimatedSeconds, referenceIds: effectiveReferenceIds, provider, qualityTier: "fast", ltxPreset, ltxRenderMode, continuityFrame, keyframes, aspectRatio });
-    console.info(`[video.start] requestId=${requestId} generationId=${record.id} provider=${provider} operation=${record.operationName} model=${record.model} tier=${record.qualityTier} aspectRatio=${aspectRatio} references=${record.usedReferenceIds.length} continuity=${Boolean(record.continuitySourceGenerationId)}`);
+    const shot = scene?.shots.find((item) => item.id === shotId);
+    const record = await startVideoGeneration({ id: randomUUID(), episodeId, shotId, prompt, estimatedSeconds, referenceIds: effectiveReferenceIds, provider, qualityTier: "fast", ltxPreset, ltxRenderMode, continuityFrame, keyframes, aspectRatio, shot });
+    console.info(`[video.start] requestId=${requestId} generationId=${record.id} requestedProvider=${provider} provider=${record.provider} routingMode=${record.routing?.mode || "legacy"} recommendedProvider=${record.routing?.recommendedProvider || record.provider} operation=${record.operationName} model=${record.model} tier=${record.qualityTier} aspectRatio=${aspectRatio} references=${record.usedReferenceIds.length} continuity=${Boolean(record.continuitySourceGenerationId)}`);
     return NextResponse.json({ generation: generationView(record), requestId }, { status: 202 });
   } catch (error) {
     logServerError("veo.start", error, requestId);

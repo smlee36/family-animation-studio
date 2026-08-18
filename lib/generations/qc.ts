@@ -6,6 +6,7 @@ import type { Responses } from "openai/resources/responses/responses";
 import { getReference } from "@/lib/references/storage";
 import type { InitialFrameKind, ShotQualityResult, ShotQualityScores } from "@/lib/generations/types";
 import { CHILD_SCALE_LOCK, PARENT_SCALE_LOCK, TEDDY_SCALE_LOCK } from "@/lib/visual-bible";
+import { qwenProviderEnabled, qwenVisionJson, type QwenVisionContent } from "@/lib/qwen/client";
 
 const QC_SCHEMA = {
   type: "object",
@@ -121,9 +122,6 @@ export async function evaluateShotQuality(input: {
     endState: string;
   };
 }): Promise<ShotQualityResult> {
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
-  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
-
   const references = await referenceContent(input.referenceIds);
   const frameContent: Responses.ResponseInputContent[] = input.frames.flatMap((imageUrl, index) => [
     { type: "input_text", text: `ORDERED VIDEO FRAME ${index + 1} OF ${input.frames.length}` },
@@ -135,6 +133,47 @@ export async function evaluateShotQuality(input: {
       : "PREVIOUS SHOT FINAL FRAME — compare this directly with ORDERED VIDEO FRAME 1 for cross-Shot continuity." },
     { type: "input_image", detail: "high", image_url: input.continuityFrame },
   ] : [];
+  const allContent = [
+    {
+      type: "input_text" as const,
+      text: `SHOT SPECIFICATION:\n${JSON.stringify(input.shot)}\n\nReference images appear first when available. Ordered sampled frames follow.`,
+    },
+    ...references,
+    ...continuityContent,
+    ...frameContent,
+  ];
+  if (qwenProviderEnabled("qc")) {
+    try {
+      const response = await qwenVisionJson({
+        instructions: QC_INSTRUCTIONS,
+        content: allContent as QwenVisionContent[],
+        schemaName: "family_animation_shot_qc",
+        schema: QC_SCHEMA,
+        maxOutputTokens: 4_000,
+      });
+      const parsed = JSON.parse(response.outputText) as {
+        scores?: Record<string, unknown>;
+        summary?: unknown;
+        correctionPrompt?: unknown;
+      };
+      const scores = normalizeScores(parsed.scores || {}, references.length > 0);
+      return {
+        scores,
+        overall: overallScore(scores),
+        summary: typeof parsed.summary === "string" ? parsed.summary : "영상 품질 검수가 완료되었습니다.",
+        correctionPrompt: typeof parsed.correctionPrompt === "string" ? parsed.correctionPrompt : "Preserve stable characters, natural motion, and consistent scene details.",
+        evaluatedAt: new Date().toISOString(),
+        responseId: response.responseId,
+        model: response.model,
+      };
+    } catch (error) {
+      console.error("[qc.qwen-fallback]", error);
+      if (process.env.QWEN_OPENAI_FALLBACK?.trim().toLowerCase() === "disabled") throw error;
+    }
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
   const model = process.env.OPENAI_QC_MODEL?.trim() || "gpt-5.6-terra";
   const client = new OpenAI({ apiKey, timeout: 120_000, maxRetries: 2 });
   const response = await client.responses.create({
@@ -142,15 +181,7 @@ export async function evaluateShotQuality(input: {
     instructions: QC_INSTRUCTIONS,
     input: [{
       role: "user",
-      content: [
-        {
-          type: "input_text",
-          text: `SHOT SPECIFICATION:\n${JSON.stringify(input.shot)}\n\nReference images appear first when available. Ordered sampled frames follow.`,
-        },
-        ...references,
-        ...continuityContent,
-        ...frameContent,
-      ],
+      content: allContent,
     }],
     max_output_tokens: 4_000,
     store: false,

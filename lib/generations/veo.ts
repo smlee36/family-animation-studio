@@ -2,17 +2,18 @@ import "server-only";
 
 import { get, put } from "@vercel/blob";
 import { GoogleGenAI, VideoGenerationReferenceType, type VideoGenerationReferenceImage } from "@google/genai";
-import type { InitialFrameKind, ShotGenerationRecord, VeoQualityTier, VideoAspectRatio } from "@/lib/generations/types";
+import type { InitialFrameKind, ShotGenerationRecord, VeoQualityTier, VideoAspectRatio, VideoRoutingDecision } from "@/lib/generations/types";
 import { generationContinuityFramePath, generationSceneMasterFramePath, generationVideoPath, saveGeneration } from "@/lib/generations/storage";
 import { linkGenerationToEpisode } from "@/lib/episodes/storage";
 import { getReference } from "@/lib/references/storage";
 import { familyScaleLock, referenceScaleHint } from "@/lib/visual-bible";
+import { generateQwenSceneFrame, qwenImageConfigured } from "@/lib/generations/qwen-image";
 
 const MAX_REFERENCE_BYTES = 5 * 1024 * 1024;
 const MINOR_PATTERN = /\b(child|kid|toddler|baby|boy|girl|infant)\b|아이|아기/i;
 const PERSON_PATTERN = /\b(person|people|family|father|mother|parent|child|kid|toddler|baby|boy|girl|man|woman|dad|mom)\b|가족|아빠|엄마|아이|아기/i;
 
-type OmniReference = {
+export type OmniReference = {
   id: string;
   category: string;
   name: string;
@@ -102,7 +103,7 @@ async function loadReferences(referenceIds: string[], allowReferences: boolean) 
   return { images, used, omitted, constraints };
 }
 
-async function loadOmniReferences(referenceIds: string[]) {
+export async function loadOmniReferences(referenceIds: string[]) {
   const requested = [...new Set(referenceIds)].slice(0, 6);
   const references: OmniReference[] = [];
   const omitted: string[] = [];
@@ -212,6 +213,24 @@ export async function generateSceneFrameImage(input: {
   pathname: string;
 }) {
   const loaded = await loadOmniReferences(input.referenceIds);
+  if (process.env.SCENE_IMAGE_PROVIDER?.trim().toLowerCase() === "qwen" && qwenImageConfigured() && loaded.references.length) {
+    try {
+      const frame = await generateQwenSceneFrame({
+        id: input.id,
+        prompt: `${masterReferenceLockPrompt(input.prompt, loaded.references.map((reference) => `${reference.category} '${reference.name}'`))}\nLocation lock: preserve the supplied home reference exactly. When no location image is supplied, use a contemporary Korean apartment interior with familiar Korean-family furnishings; do not introduce Japanese traditional architecture, tatami, shoji, calligraphy, or unrelated scenery. Keep the requested camera framing and fill the frame with the family action.`,
+        aspectRatio: input.aspectRatio,
+        references: loaded.references,
+      });
+      return {
+        ...frame,
+        usedReferenceIds: loaded.references.map((reference) => reference.id),
+        omittedReferenceIds: loaded.omitted,
+      };
+    } catch (error) {
+      console.error("[scene-frame.qwen-fallback]", error);
+      if (process.env.SCENE_IMAGE_FALLBACK?.trim().toLowerCase() === "disabled") throw error;
+    }
+  }
   const frame = await createSceneMasterFrame(input, loaded.references);
   return {
     bytes: frame.bytes || Buffer.from(frame.data, "base64"),
@@ -233,6 +252,7 @@ async function startOmniGeneration(input: {
   parentGenerationId?: string;
   continuityFrame?: ContinuityFrameInput;
   aspectRatio?: VideoAspectRatio;
+  routing?: VideoRoutingDecision;
 }, references: OmniReference[], omittedReferenceIds: string[], continuityFrame: LoadedContinuityFrame | null) {
   const durationSeconds = nearestDuration(input.estimatedSeconds);
   const constraints = references.map((reference) => `${reference.category} '${reference.name}'${reference.description ? ` (${reference.description})` : ""}`);
@@ -306,6 +326,8 @@ async function startOmniGeneration(input: {
     shotId: input.shotId,
     operationName: interaction.id || `omni-${input.id}`,
     model,
+    provider: "google",
+    routing: input.routing,
     sourcePrompt: input.prompt,
     prompt,
     continuitySourceGenerationId: continuityFrame?.sourceGenerationId || "",
@@ -345,6 +367,7 @@ export async function startVeoGeneration(input: {
   parentGenerationId?: string;
   continuityFrame?: ContinuityFrameInput;
   aspectRatio?: VideoAspectRatio;
+  routing?: VideoRoutingDecision;
 }) {
   const omniReferences = await loadOmniReferences(input.referenceIds);
   let continuityFrame = await loadContinuityFrame(input.continuityFrame);
@@ -385,6 +408,8 @@ export async function startVeoGeneration(input: {
     shotId: input.shotId,
     operationName: operation.name,
     model,
+    provider: "google",
+    routing: input.routing,
     sourcePrompt: input.prompt,
     prompt: effectivePrompt,
     continuitySourceGenerationId: "",

@@ -10,6 +10,7 @@ import { listReferences } from "@/lib/references/storage";
 import { getStoryInputs } from "@/lib/story-inputs/storage";
 import { CHILD_SCALE_LOCK, PARENT_SCALE_LOCK, TEDDY_SCALE_LOCK } from "@/lib/visual-bible";
 import type { EpisodeFormat } from "@/lib/episodes/types";
+import { qwenProviderEnabled, qwenVisionJson, type QwenVisionContent } from "@/lib/qwen/client";
 
 const MAX_STORYBOARD_IMAGES = 3;
 const MAX_STORYBOARD_BYTES = 5 * 1024 * 1024;
@@ -34,6 +35,8 @@ Rules:
 - When characters recur, preserve the same identity, face, hairstyle, body proportions, Korean appearance, and appropriate clothing. Preserve backgrounds and objects within a Scene. Briefly ask for stable features, natural hands/body, and no duplicates only when relevant.
 - Write the applicable fixed scale facts directly into every Shot prompt: ${CHILD_SCALE_LOCK} ${PARENT_SCALE_LOCK} ${TEDDY_SCALE_LOCK} Apply only the facts for subjects visible in that Shot. Preserve relative physical size under perspective and across frames.
 - Make each Shot's startState compatible with the previous Shot's endState. End states must be visually concrete so a later system can use the last frame for continuity.
+- Classify every Shot with motionProfile. bodyMotion is small for expressions or subtle upper-body movement, medium for a meaningful pose or hand change, and large for full-body travel or major posture change. Mark physical contact, object transfer, walking/running, large pose changes, location changes, and whether a specified end frame is needed. characterCount counts visible people, not toys.
+- A Shot must never change location internally. When an action crosses from one room to another, end the first Shot at the doorway and create a new Scene or Shot for the new setting. In that case use changesLocation only as a warning on a minimal transition Shot, not to combine two rooms into one generation.
 - For every Shot, select every relevant character, room, and object Master Reference ID, up to six IDs for Gemini Omni's multimodal video input. Prefer combined character/scene sheets when they accurately cover several elements. Encode the locked appearance of any additional relevant Master Reference explicitly in the English prompt.
 - sceneMasterReferenceId is the best reusable scene anchor, or an empty string when none fits.
 - Episode storyboard images are primary planning evidence. Read numbered panels, captions, characters, places, objects, and action order carefully. Preserve their sequence and turn visible actions into semantic Scenes and one-action Shots.
@@ -95,9 +98,6 @@ async function masterReferenceImageInput(references: Awaited<ReturnType<typeof l
 }
 
 export async function createDirectorPlan(story: string, storyboardInputIds: string[] = [], format: EpisodeFormat = "reels"): Promise<DirectorResponse & { responseId: string; model: string }> {
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
-  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
-
   const references = await listReferences();
   const referenceCatalog: DirectorReference[] = references.map(({ id, name, category, description }) => ({
     id,
@@ -114,6 +114,25 @@ export async function createDirectorPlan(story: string, storyboardInputIds: stri
     ...(await masterReferenceImageInput(references)),
     ...(await storyboardInput(references)),
   ];
+  if (qwenProviderEnabled("director")) {
+    try {
+      const response = await qwenVisionJson({
+        instructions: DIRECTOR_INSTRUCTIONS,
+        content: content as QwenVisionContent[],
+        schemaName: "family_animation_director_plan",
+        schema: DIRECTOR_PLAN_SCHEMA,
+        maxOutputTokens: 20_000,
+      });
+      const plan = normalizeDirectorPlan(JSON.parse(response.outputText), new Set(references.map(({ id }) => id)));
+      return { plan, references: referenceCatalog, responseId: response.responseId, model: response.model };
+    } catch (error) {
+      console.error("[director.qwen-fallback]", error);
+      if (process.env.QWEN_OPENAI_FALLBACK?.trim().toLowerCase() === "disabled") throw error;
+    }
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
   const model = process.env.OPENAI_DIRECTOR_MODEL?.trim() || "gpt-5.6-terra";
   const client = new OpenAI({ apiKey, timeout: 120_000, maxRetries: 2 });
   const response = await client.responses.create({

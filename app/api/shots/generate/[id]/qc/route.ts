@@ -64,7 +64,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
     const qc = await evaluateShotQuality({ frames, referenceIds: qcReferenceIds, shot, continuityFrame, initialFrameKind: record.initialFrameKind });
     const regenerationCount = record.autoRegenerationCount || 0;
-    const meetsApprovalGate = qc.overall >= 85 && qc.scores.referenceMatch >= 85;
+    const meetsApprovalGate = qc.overall >= 85 && qc.scores.referenceMatch >= 85 &&
+      qc.scores.characterConsistency >= 85 && qc.scores.continuity >= 80;
     const shouldRegenerate = !meetsApprovalGate && regenerationCount < 2;
     const evaluatedRecord = {
       ...record,
@@ -84,6 +85,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         if (correctedPrompt.length > MAX_GENERATION_PROMPT_CHARS) {
           throw new Error(`Corrected prompt exceeds ${MAX_GENERATION_PROMPT_CHARS} characters`);
         }
+        const severeMotionFailure = qc.scores.handsBody < 75 || qc.scores.motionNaturalness < 75 || qc.scores.characterConsistency < 75;
+        const qcFallbackProvider = record.provider === "ltx" && severeMotionFailure ? "wan" as const : record.provider;
         const nextRecord = await startVideoGeneration({
           id: randomUUID(),
           episodeId: record.episodeId,
@@ -93,6 +96,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           referenceIds: [...new Set([...record.usedReferenceIds, ...record.omittedReferenceIds])].slice(0, 6),
           qualityTier: "standard",
           provider: record.provider || (record.model.toLowerCase().includes("ltx") ? "ltx" : "google"),
+          qcFallbackProvider,
+          retryReason: `QC ${qc.overall}: 손·신체 ${qc.scores.handsBody}, 움직임 ${qc.scores.motionNaturalness}, 캐릭터 ${qc.scores.characterConsistency}`,
           ltxPreset: record.ltxPreset || "gentle",
           autoRegenerationCount: regenerationCount + 1,
           parentGenerationId: record.id,

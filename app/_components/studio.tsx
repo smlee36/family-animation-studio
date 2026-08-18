@@ -250,12 +250,12 @@ function ltxRemainingSeconds(generation: ShotGenerationView, nowMs: number) {
   return Math.max(30, baseSeconds - elapsed);
 }
 
-function LtxGenerationProgress({ generation, nowMs }: { generation: ShotGenerationView; nowMs: number }) {
+function B200GenerationProgress({ generation, nowMs }: { generation: ShotGenerationView; nowMs: number }) {
   const stage = ltxProgressStage(generation);
   const queueCopy = generation.backendQueuePosition > 0 ? ` · 앞에 ${generation.backendQueuePosition}개` : "";
-  const labels = ["대기 중", "LTX 실행 중", "저장 중"];
+  const labels = ["대기 중", generation.provider === "wan" ? "Wan 실행 중" : "LTX 실행 중", "저장 중"];
   return (
-    <section className="ltx-generation-progress" aria-label="LTX 영상 생성 진행 상황" aria-live="polite">
+    <section className="ltx-generation-progress" aria-label="B200 영상 생성 진행 상황" aria-live="polite">
       <div className="ltx-progress-summary">
         <strong>{labels[stage]}{stage === 0 ? queueCopy : ""}</strong>
         <span>예상 남은 시간 {formatRemainingTime(ltxRemainingSeconds(generation, nowMs))}</span>
@@ -305,7 +305,7 @@ export function Studio({
   const [error, setError] = useState(initialEpisode?.episode.error || "");
   const [generations, setGenerations] = useState<Record<string, ShotGenerationView>>(initialEpisode?.generations || {});
   const [generationVersions, setGenerationVersions] = useState<Record<string, ShotGenerationView[]>>(initialEpisode?.generationVersions || {});
-  const [videoProvider, setVideoProvider] = useState<VideoGenerationProvider>("ltx");
+  const [videoProvider, setVideoProvider] = useState<VideoGenerationProvider>("auto");
   const [sceneFrames, setSceneFrames] = useState<Record<string, SceneFrameRecord>>(initialEpisode?.episode.sceneFrames || {});
   const [sceneFrameInstructions, setSceneFrameInstructions] = useState<Record<string, string>>({});
   const [sceneFrameMessages, setSceneFrameMessages] = useState<Record<string, string>>({});
@@ -343,15 +343,15 @@ export function Studio({
   );
   pendingStoryboardsRef.current = pendingStoryboards;
 
-  const hasActiveLtxGeneration = Object.values(generations).some(
-    (generation) => generation.provider === "ltx" && generation.status === "generating",
+  const hasActiveB200Generation = Object.values(generations).some(
+    (generation) => generation.provider !== "google" && generation.status === "generating",
   );
 
   useEffect(() => {
-    if (!hasActiveLtxGeneration) return;
+    if (!hasActiveB200Generation) return;
     const interval = window.setInterval(() => setProgressNowMs(Date.now()), 1_000);
     return () => window.clearInterval(interval);
-  }, [hasActiveLtxGeneration]);
+  }, [hasActiveB200Generation]);
 
   useEffect(() => {
     let cancelled = false;
@@ -798,10 +798,11 @@ export function Studio({
         episodeId,
         shotId: shot.id,
         model: "",
-        provider: videoProvider,
+        provider: videoProvider === "auto" ? "ltx" : videoProvider,
+        routing: null,
         ltxPreset: ltxPresetForShot(shot),
         ltxRenderMode,
-        backendStatus: videoProvider === "ltx" ? "B200 연결 중" : "Google 연결 중",
+        backendStatus: videoProvider === "google" ? "Google 연결 중" : "B200 자동 배정 중",
         backendQueuePosition: 0,
         backendStartedAt: "",
         estimatedSecondsRemaining: 0,
@@ -1214,6 +1215,10 @@ export function Studio({
 
           <fieldset className="video-provider-selector">
             <legend>영상 생성 엔진</legend>
+            <label className={videoProvider === "auto" ? "selected" : ""}>
+              <input type="radio" name="video-provider" value="auto" checked={videoProvider === "auto"} onChange={() => setVideoProvider("auto")} />
+              <span><strong>자동 선택 · 권장</strong><small>동작 난이도와 QC 결과에 따라 LTX/Wan을 자동 배정</small></span>
+            </label>
             <label className={videoProvider === "ltx" ? "selected" : ""}>
               <input type="radio" name="video-provider" value="ltx" checked={videoProvider === "ltx"} onChange={() => setVideoProvider("ltx")} />
               <span><strong>B200 · LTX-2.5</strong><small>우리 서버 오픈 모델 · 레퍼런스 그림체 우선</small></span>
@@ -1224,16 +1229,16 @@ export function Studio({
             </label>
           </fieldset>
 
-          {videoProvider === "ltx" ? (
+          {videoProvider !== "google" ? (
             <section className={`ltx-batch-mode${ltxBatchMode?.enabled ? " enabled" : ""}`} aria-live="polite">
               <div>
                 <strong>여러 영상 고속 생성</strong>
                 <span>{ltxBatchMode?.message || "필요할 때 B200를 LTX 전용으로 전환합니다."}</span>
               </div>
               <button type="button" disabled={ltxBatchPending || ltxBatchMode?.state === "starting" || ltxBatchMode?.state === "restoring"} onClick={() => void toggleLtxBatchMode()}>
-                {ltxBatchPending || ltxBatchMode?.state === "starting" ? "전환 중…" : ltxBatchMode?.state === "restoring" ? "Qwen 235B 복구 중…" : ltxBatchMode?.enabled ? "고속 모드 끄기" : "고속 모드 켜기"}
+                {ltxBatchPending || ltxBatchMode?.state === "starting" ? "전환 중…" : ltxBatchMode?.state === "restoring" ? "Qwen 복구 중…" : ltxBatchMode?.enabled ? "고속 모드 끄기" : "고속 모드 켜기"}
               </button>
-              <p>Qwen 235B를 잠시 멈추고 LTX 모델을 GPU에 계속 유지합니다. 작업이 10분간 없으면 Qwen 235B가 자동으로 복구돼요.</p>
+              <p>대기 중인 Qwen 모델을 잠시 멈추고 LTX를 GPU에 계속 유지합니다. 작업이 10분간 없으면 Qwen이 자동으로 복구돼요.</p>
               {ltxBatchMessage ? <p className="ltx-batch-message">{ltxBatchMessage}</p> : null}
             </section>
           ) : null}
@@ -1259,7 +1264,7 @@ export function Studio({
                 현재 Shot 이후 멈추기
               </button>
             ) : (
-              <button className="primary-button" type="button" disabled={!orderedPlanShots.length || readyShotCount === orderedPlanShots.length || hasActiveLtxGeneration} onClick={() => void generateAllPreviews()}>
+              <button className="primary-button" type="button" disabled={!orderedPlanShots.length || readyShotCount === orderedPlanShots.length || hasActiveB200Generation} onClick={() => void generateAllPreviews()}>
                 {readyShotCount ? "이어서 전체 미리보기 만들기" : "전체 미리보기 만들기"}
               </button>
             )}
@@ -1268,10 +1273,10 @@ export function Studio({
           {format === "reels" ? (
             <section className="reels-frame-overview" aria-label="릴스 Scene 이미지 준비 상태">
               <div>
-                <strong>{videoProvider === "ltx" ? "LTX는 고정 레퍼런스에서 바로 시작해요" : "Scene 시작 이미지는 선택 사항이에요"}</strong>
+              <strong>{videoProvider !== "google" ? "B200 영상은 고정 레퍼런스에서 바로 시작해요" : "Scene 시작 이미지는 선택 사항이에요"}</strong>
                 <span>{Object.values(sceneFrames).filter((frame) => frame.approvalStatus === "approved").length} / {plan.scenes.length} 승인</span>
               </div>
-              <p>{videoProvider === "ltx"
+              <p>{videoProvider !== "google"
                 ? "정지 이미지를 새로 생성하지 않고, 자료실의 Scene·캐릭터 레퍼런스를 시작 프레임으로 사용해 B200에서 영상을 만듭니다."
                 : "Scene 이미지를 만들어 승인하면 정확한 시작 화면으로 사용합니다."}</p>
               {videoProvider === "google" ? (
@@ -1383,12 +1388,15 @@ export function Studio({
                               <h3>{shot.title}</h3>
                             </div>
                             <div className="shot-badges">
-                              {generation ? <span className={`model-tier ${generation.provider === "ltx" ? "ltx" : generation.model.includes("omni") ? "omni" : generation.qualityTier}`}>{generation.provider === "ltx" ? `LTX · ${generation.ltxRenderMode === "preview" ? "미리보기" : "고화질"}` : generation.model.includes("omni") ? "OMNI" : generation.qualityTier === "fast" ? "FAST" : "STANDARD"}</span> : null}
+                              {generation ? <span className={`model-tier ${generation.provider === "wan" ? "standard" : generation.provider === "ltx" ? "ltx" : generation.model.includes("omni") ? "omni" : generation.qualityTier}`}>{generation.provider === "wan" ? "WAN · 고난도 동작" : generation.provider === "ltx" ? `LTX · ${generation.ltxRenderMode === "preview" ? "미리보기" : "고화질"}` : generation.model.includes("omni") ? "OMNI" : generation.qualityTier === "fast" ? "FAST" : "STANDARD"}</span> : null}
                               {generation?.continuitySourceGenerationId ? <span className={`continuity-badge${continuityIsStale ? " stale" : ""}`}>{continuityIsStale ? "연결 다시 필요" : "이전 프레임 연결"}</span> : null}
                               {generation?.initialFrameKind === "scene_master" ? <span className="continuity-badge">2D Scene 기준 프레임</span> : null}
                               <span className="shot-duration">{newLtxDuration(shot.estimatedSeconds)}초</span>
                             </div>
                           </div>
+                          {generation?.routing ? (
+                            <p className="reference-reason">자동 배정: {generation.routing.selectedProvider.toUpperCase()} · {generation.routing.reason}</p>
+                          ) : null}
                           <p className="shot-action">{shot.action}</p>
                           <div className="continuity-row">
                             <span><b>시작</b>{shot.startState}</span>
@@ -1511,7 +1519,7 @@ export function Studio({
                                 {generation.approvalStatus !== "approved" && !(generation.provider === "ltx" && generation.ltxRenderMode === "preview") ? (
                                   <button className="small-action" type="button" onClick={() => approveShot(shot.id, generation)}>이대로 승인</button>
                                 ) : null}
-                                <button className="small-action" type="button" onClick={() => generateShot(shot, generation.ltxRenderMode)}>{generation.provider === "ltx" && generation.ltxRenderMode === "preview" ? "미리보기 다시 생성" : videoProvider === "ltx" ? "LTX로 다시 생성" : selectedReferences.length ? "고정 기준으로 다시 생성" : "Fast로 다시 생성"}</button>
+                                <button className="small-action" type="button" onClick={() => generateShot(shot, generation.ltxRenderMode)}>{generation.provider === "ltx" && generation.ltxRenderMode === "preview" ? "미리보기 다시 생성" : videoProvider === "auto" ? "자동 선택으로 다시 생성" : videoProvider === "ltx" ? "LTX로 다시 생성" : selectedReferences.length ? "고정 기준으로 다시 생성" : "Fast로 다시 생성"}</button>
                                 {!generation.qc && !qcPendingShots.has(shot.id) && !(generation.provider === "ltx" && generation.ltxRenderMode === "preview") ? (
                                   <button className="small-action" type="button" onClick={() => runQcCycle(shot, generation)}>검수 다시 시도</button>
                                 ) : null}
@@ -1533,10 +1541,10 @@ export function Studio({
                             </div>
                           ) : (
                             <>
-                              {generation?.status === "generating" && generation.provider === "ltx" ? (
-                                <LtxGenerationProgress generation={generation} nowMs={progressNowMs} />
+                              {generation?.status === "generating" && generation.provider !== "google" ? (
+                                <B200GenerationProgress generation={generation} nowMs={progressNowMs} />
                               ) : null}
-                              {videoProvider === "ltx" && generation?.status !== "generating" ? (
+                              {(videoProvider === "ltx" || generation?.provider === "ltx") && generation?.status !== "generating" ? (
                                 <div className="ltx-render-actions">
                                   <button className="shot-generate-button" type="button" disabled={!shot.prompt.trim()} onClick={() => generateShot(shot, "preview")}>빠른 미리보기 만들기</button>
                                   <button className="small-action" type="button" disabled={!shot.prompt.trim()} onClick={() => generateShot(shot, "final")}>바로 고화질 만들기</button>
@@ -1549,7 +1557,7 @@ export function Studio({
                                   disabled={generation?.status === "generating" || !shot.prompt.trim()}
                                   onClick={() => generateShot(shot)}
                                 >
-                                  {generation?.status === "generating" ? <><span className="button-spinner" aria-hidden="true" />{generation.provider === "ltx" ? generation.backendStatus || "B200 LTX 영상 생성 중…" : selectedReferences.length ? "고정 기준 영상 생성 중…" : generation.qualityTier === "standard" ? "Standard 보정 생성 중…" : "Fast 영상 생성 중…"}</> : generation?.status === "failed" ? "다시 생성" : "영상 만들기"}
+                                  {generation?.status === "generating" ? <><span className="button-spinner" aria-hidden="true" />{generation.provider === "ltx" ? generation.backendStatus || "B200 LTX 영상 생성 중…" : generation.provider === "wan" ? generation.backendStatus || "B200 Wan 영상 생성 중…" : selectedReferences.length ? "고정 기준 영상 생성 중…" : generation.qualityTier === "standard" ? "Standard 보정 생성 중…" : "Fast 영상 생성 중…"}</> : generation?.status === "failed" ? "다시 생성" : "영상 만들기"}
                                 </button>
                               )}
                             </>

@@ -7,6 +7,19 @@ export type DirectorReference = {
   description: string;
 };
 
+export type ShotBodyMotion = "small" | "medium" | "large";
+
+export type ShotMotionProfile = {
+  bodyMotion: ShotBodyMotion;
+  characterCount: number;
+  hasPhysicalContact: boolean;
+  hasObjectTransfer: boolean;
+  hasWalkingOrRunning: boolean;
+  hasLargePoseChange: boolean;
+  changesLocation: boolean;
+  requiresEndFrame: boolean;
+};
+
 export type DirectorShot = {
   id: string;
   title: string;
@@ -17,6 +30,7 @@ export type DirectorShot = {
   startState: string;
   endState: string;
   prompt: string;
+  motionProfile: ShotMotionProfile;
 };
 
 export type DirectorScene = {

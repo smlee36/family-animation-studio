@@ -1,4 +1,4 @@
-import type { DirectorPlan } from "@/lib/director/types";
+import type { DirectorPlan, ShotMotionProfile } from "@/lib/director/types";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -12,6 +12,32 @@ function record(value: unknown): UnknownRecord {
 function string(value: unknown, field: string) {
   if (typeof value !== "string" || !value.trim()) throw new Error(`Director output is missing ${field}`);
   return value.trim();
+}
+
+function boolean(value: unknown) {
+  return value === true;
+}
+
+function motionProfile(value: unknown): ShotMotionProfile {
+  const source = value && typeof value === "object" && !Array.isArray(value)
+    ? value as UnknownRecord
+    : {};
+  const bodyMotion = source.bodyMotion === "large" || source.bodyMotion === "medium"
+    ? source.bodyMotion
+    : "small";
+  const rawCharacterCount = typeof source.characterCount === "number" && Number.isFinite(source.characterCount)
+    ? Math.round(source.characterCount)
+    : 1;
+  return {
+    bodyMotion,
+    characterCount: Math.max(0, Math.min(6, rawCharacterCount)),
+    hasPhysicalContact: boolean(source.hasPhysicalContact),
+    hasObjectTransfer: boolean(source.hasObjectTransfer),
+    hasWalkingOrRunning: boolean(source.hasWalkingOrRunning),
+    hasLargePoseChange: boolean(source.hasLargePoseChange),
+    changesLocation: boolean(source.changesLocation),
+    requiresEndFrame: boolean(source.requiresEndFrame),
+  };
 }
 
 export function normalizeDirectorPlan(value: unknown, validReferenceIds: Set<string>): DirectorPlan {
@@ -49,6 +75,7 @@ export function normalizeDirectorPlan(value: unknown, validReferenceIds: Set<str
         startState: string(shot.startState, "shot.startState"),
         endState: string(shot.endState, "shot.endState"),
         prompt: string(shot.prompt, "shot.prompt"),
+        motionProfile: motionProfile(shot.motionProfile),
       };
     });
 

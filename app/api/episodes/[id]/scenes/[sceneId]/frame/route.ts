@@ -7,7 +7,7 @@ import { getEpisode, saveSceneFrame } from "@/lib/episodes/storage";
 import type { SceneFrameRecord } from "@/lib/episodes/types";
 import { generateSceneFrameImage, SceneMasterFrameError } from "@/lib/generations/veo";
 
-export const maxDuration = 180;
+export const maxDuration = 300;
 
 function validId(value: string) {
   return /^[0-9a-f-]{36}$/i.test(value);

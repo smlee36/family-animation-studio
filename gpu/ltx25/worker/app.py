@@ -22,6 +22,14 @@ from fastapi.responses import FileResponse
 
 
 ROOT = Path(os.environ.get("LTX25_ROOT", "/NHNHOME/WORKSPACE/26mss002_U1A/ltx25"))
+QWEN_IMAGE_ROOT = Path(os.environ.get("QWEN_IMAGE_ROOT", str(ROOT.parent / "qwen-image")))
+IMAGE_JOBS_ROOT = QWEN_IMAGE_ROOT / "jobs"
+QWEN_IMAGE_PYTHON = QWEN_IMAGE_ROOT / ".venv" / "bin" / "python"
+QWEN_IMAGE_RUNNER = QWEN_IMAGE_ROOT / "run_job.py"
+WAN22_ROOT = Path(os.environ.get("WAN22_ROOT", str(ROOT.parent / "wan22")))
+WAN_JOBS_ROOT = WAN22_ROOT / "jobs"
+WAN_PYTHON = WAN22_ROOT / ".venv" / "bin" / "python"
+WAN_RUNNER = WAN22_ROOT / "run_job.py"
 JOBS_ROOT = ROOT / "jobs"
 MERGES_ROOT = ROOT / "merges"
 LTX_ROOT = ROOT / "LTX-2"
@@ -49,9 +57,12 @@ PRESETS = {
 app = FastAPI(title="Family Animation LTX-2.5 Worker", docs_url=None, redoc_url=None)
 job_queue: queue.Queue[str] = queue.Queue()
 merge_queue: queue.Queue[str] = queue.Queue()
+image_queue: queue.Queue[str] = queue.Queue()
+wan_queue: queue.Queue[str] = queue.Queue()
 worker_started = False
 worker_lock = threading.Lock()
 batch_lock = threading.Lock()
+gpu_generation_lock = threading.Lock()
 resident_process: subprocess.Popen | None = None
 
 
@@ -107,6 +118,54 @@ def save_job(job: dict) -> None:
     os.replace(temporary, path)
 
 
+def image_job_dir(job_id: str) -> Path:
+    return IMAGE_JOBS_ROOT / job_id
+
+
+def image_metadata_path(job_id: str) -> Path:
+    return image_job_dir(job_id) / "job.json"
+
+
+def load_image_job(job_id: str) -> dict:
+    path = image_metadata_path(job_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Image job not found")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def save_image_job(job: dict) -> None:
+    path = image_metadata_path(job["id"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.chmod(0o600)
+    os.replace(temporary, path)
+
+
+def wan_job_dir(job_id: str) -> Path:
+    return WAN_JOBS_ROOT / job_id
+
+
+def wan_metadata_path(job_id: str) -> Path:
+    return wan_job_dir(job_id) / "job.json"
+
+
+def load_wan_job(job_id: str) -> dict:
+    path = wan_metadata_path(job_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Wan job not found")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def save_wan_job(job: dict) -> None:
+    path = wan_metadata_path(job["id"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.chmod(0o600)
+    os.replace(temporary, path)
+
+
 def default_batch_state() -> dict:
     return {"enabled": False, "state": "off", "message": "일반 모드", "enabled_at": "", "last_job_at": "", "idle_restore_seconds": 600, "error": ""}
 
@@ -153,11 +212,11 @@ def batch_status() -> dict:
 def stop_standby_service() -> None:
     AX_PAUSE_FILE.touch(mode=0o600, exist_ok=True)
     subprocess.run(["pkill", "-f", "vllm.entrypoints.openai.api_server"], check=False)
-    for _ in range(60):
+    for _ in range(180):
         if not process_running("vllm.entrypoints.openai.api_server"):
             return
         time.sleep(1)
-    raise RuntimeError("Qwen 235B service did not stop within 60 seconds")
+    raise RuntimeError("Qwen standby service did not stop within 180 seconds")
 
 
 def start_resident_runner() -> None:
@@ -229,25 +288,27 @@ def standby_healthy() -> bool:
 def restore_standby_service() -> None:
     with batch_lock:
         state = load_batch_state()
-        state.update(enabled=False, state="restoring", message="Qwen 235B 서비스를 복구하고 있어요.")
+        state.update(enabled=False, state="restoring", message="Qwen 대기 모델을 복구하고 있어요.")
         save_batch_state(state)
         try:
             stop_resident_runner()
-            if not process_running("vllm.entrypoints.openai.api_server"):
-                log_path = AX_ROOT / "logs" / "vllm_batch_restore.log"
-                log_path.parent.mkdir(parents=True, exist_ok=True)
-                with log_path.open("ab") as log_file:
-                    subprocess.Popen([str(AX_SERVE_SCRIPT)], cwd=AX_ROOT, stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True)
             AX_PAUSE_FILE.unlink(missing_ok=True)
+            launch_attempted = False
             for _ in range(180):
                 if standby_healthy():
-                    state.update(state="off", message="일반 모드 · Qwen 235B 정상 복구", error="")
+                    state.update(state="off", message="일반 모드 · Qwen 정상 복구", error="")
                     save_batch_state(state)
                     return
+                if not launch_attempted and not process_running("vllm.entrypoints.openai.api_server"):
+                    log_path = AX_ROOT / "logs" / "vllm_batch_restore.log"
+                    log_path.parent.mkdir(parents=True, exist_ok=True)
+                    with log_path.open("ab") as log_file:
+                        subprocess.Popen([str(AX_SERVE_SCRIPT)], cwd=AX_ROOT, stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True)
+                    launch_attempted = True
                 time.sleep(5)
-            raise RuntimeError("Qwen 235B API did not become healthy within 15 minutes")
+            raise RuntimeError("Qwen API did not become healthy within 15 minutes")
         except Exception as error:
-            state.update(state="error", message="Qwen 235B 자동 복구를 확인해 주세요.", error=str(error)[-1000:])
+            state.update(state="error", message="Qwen 자동 복구를 확인해 주세요.", error=str(error)[-1000:])
         save_batch_state(state)
 
 
@@ -275,6 +336,30 @@ def expected_runtime_seconds(job: dict) -> int:
 def active_jobs() -> list[dict]:
     jobs: list[dict] = []
     for path in JOBS_ROOT.glob("*/job.json"):
+        try:
+            job = json.loads(path.read_text(encoding="utf-8"))
+            if job.get("status") in {"queued", "running"}:
+                jobs.append(job)
+        except Exception:
+            continue
+    return sorted(jobs, key=lambda item: item.get("created_at", ""))
+
+
+def active_image_jobs() -> list[dict]:
+    jobs: list[dict] = []
+    for path in IMAGE_JOBS_ROOT.glob("*/job.json"):
+        try:
+            job = json.loads(path.read_text(encoding="utf-8"))
+            if job.get("status") in {"queued", "running"}:
+                jobs.append(job)
+        except Exception:
+            continue
+    return sorted(jobs, key=lambda item: item.get("created_at", ""))
+
+
+def active_wan_jobs() -> list[dict]:
+    jobs: list[dict] = []
+    for path in WAN_JOBS_ROOT.glob("*/job.json"):
         try:
             job = json.loads(path.read_text(encoding="utf-8"))
             if job.get("status") in {"queued", "running"}:
@@ -373,9 +458,116 @@ def worker_loop() -> None:
     while True:
         job_id = job_queue.get()
         try:
-            run_job(job_id)
+            with gpu_generation_lock:
+                run_job(job_id)
         finally:
             job_queue.task_done()
+
+
+def image_error_tail(log_path: Path) -> str:
+    if not log_path.is_file():
+        return "Qwen Image process failed without a log"
+    return log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+
+
+def run_image_job(job_id: str) -> None:
+    job = load_image_job(job_id)
+    previous_batch = bool(load_batch_state()["enabled"])
+    job.update(status="running", stage="Qwen Image 모델을 준비하는 중", started_at=now_iso(), updated_at=now_iso())
+    save_image_job(job)
+    log_path = image_job_dir(job_id) / "generation.log"
+    try:
+        if previous_batch:
+            stop_resident_runner()
+        else:
+            stop_standby_service()
+        job.update(stage="가족 레퍼런스로 Scene 이미지를 생성 중", updated_at=now_iso())
+        save_image_job(job)
+        with log_path.open("wb") as log_file:
+            result = subprocess.run(
+                [str(QWEN_IMAGE_PYTHON), str(QWEN_IMAGE_RUNNER), job_id],
+                cwd=QWEN_IMAGE_ROOT,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                check=False,
+                timeout=600,
+            )
+        output_path = image_job_dir(job_id) / "output.jpg"
+        if result.returncode != 0 or not output_path.is_file() or output_path.stat().st_size == 0:
+            raise RuntimeError(image_error_tail(log_path))
+        job.update(status="succeeded", stage="완료", model="Qwen-Image-Edit-2511", output_bytes=output_path.stat().st_size, completed_at=now_iso(), updated_at=now_iso(), error="")
+    except Exception as error:
+        job.update(status="failed", stage="실패", completed_at=now_iso(), updated_at=now_iso(), error=str(error)[-4000:])
+    finally:
+        save_image_job(job)
+        try:
+            if previous_batch:
+                start_resident_runner()
+            else:
+                restore_standby_service()
+        except Exception as error:
+            job["restore_warning"] = str(error)[-1000:]
+            save_image_job(job)
+
+
+def image_worker_loop() -> None:
+    while True:
+        job_id = image_queue.get()
+        try:
+            with gpu_generation_lock:
+                run_image_job(job_id)
+        finally:
+            image_queue.task_done()
+
+
+def run_wan_job(job_id: str) -> None:
+    job = load_wan_job(job_id)
+    previous_batch = bool(load_batch_state()["enabled"])
+    job.update(status="running", stage="Wan 2.2 모델을 준비하는 중", started_at=now_iso(), updated_at=now_iso())
+    save_wan_job(job)
+    log_path = wan_job_dir(job_id) / "generation.log"
+    try:
+        if previous_batch:
+            stop_resident_runner()
+        else:
+            stop_standby_service()
+        job.update(stage="고난도 전신 동작을 생성 중", updated_at=now_iso())
+        save_wan_job(job)
+        with log_path.open("wb") as log_file:
+            result = subprocess.run(
+                [str(WAN_PYTHON), str(WAN_RUNNER), job_id],
+                cwd=WAN22_ROOT,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                check=False,
+                timeout=7_200,
+            )
+        output_path = wan_job_dir(job_id) / "output.mp4"
+        if result.returncode != 0 or not output_path.is_file() or output_path.stat().st_size == 0:
+            raise RuntimeError(image_error_tail(log_path))
+        job.update(status="succeeded", stage="완료", model="Wan 2.2 I2V-A14B", output_bytes=output_path.stat().st_size, completed_at=now_iso(), updated_at=now_iso(), error="")
+    except Exception as error:
+        job.update(status="failed", stage="실패", completed_at=now_iso(), updated_at=now_iso(), error=str(error)[-4000:])
+    finally:
+        save_wan_job(job)
+        try:
+            if previous_batch:
+                start_resident_runner()
+            else:
+                restore_standby_service()
+        except Exception as error:
+            job["restore_warning"] = str(error)[-1000:]
+            save_wan_job(job)
+
+
+def wan_worker_loop() -> None:
+    while True:
+        job_id = wan_queue.get()
+        try:
+            with gpu_generation_lock:
+                run_wan_job(job_id)
+        finally:
+            wan_queue.task_done()
 
 
 def download_merge_clip(url: str, destination: Path) -> None:
@@ -496,7 +688,7 @@ def batch_idle_monitor() -> None:
     while True:
         time.sleep(30)
         state = load_batch_state()
-        if not state["enabled"] or state["state"] != "ready" or active_jobs():
+        if not state["enabled"] or state["state"] != "ready" or active_jobs() or active_image_jobs() or active_wan_jobs():
             continue
         last_job_at = parse_timestamp(state["last_job_at"] or state["enabled_at"])
         if time.time() - last_job_at >= int(state["idle_restore_seconds"]):
@@ -510,6 +702,8 @@ def start_worker() -> None:
             return
         JOBS_ROOT.mkdir(parents=True, exist_ok=True)
         MERGES_ROOT.mkdir(parents=True, exist_ok=True)
+        IMAGE_JOBS_ROOT.mkdir(parents=True, exist_ok=True)
+        WAN_JOBS_ROOT.mkdir(parents=True, exist_ok=True)
         state = load_batch_state()
         if state["enabled"]:
             try:
@@ -521,6 +715,8 @@ def start_worker() -> None:
         thread = threading.Thread(target=worker_loop, name="ltx25-worker", daemon=True)
         thread.start()
         threading.Thread(target=merge_worker_loop, name="ltx25-merge-worker", daemon=True).start()
+        threading.Thread(target=image_worker_loop, name="qwen-image-worker", daemon=True).start()
+        threading.Thread(target=wan_worker_loop, name="wan22-worker", daemon=True).start()
         threading.Thread(target=batch_idle_monitor, name="ltx25-batch-monitor", daemon=True).start()
         worker_started = True
         for path in sorted(JOBS_ROOT.glob("*/job.json")):
@@ -541,6 +737,24 @@ def start_worker() -> None:
                     merge_queue.put(merge_job["id"])
             except Exception:
                 continue
+        for path in sorted(IMAGE_JOBS_ROOT.glob("*/job.json")):
+            try:
+                image_job = json.loads(path.read_text(encoding="utf-8"))
+                if image_job.get("status") in {"queued", "running"}:
+                    image_job.update(status="queued", stage="재시작 후 대기 중", updated_at=now_iso())
+                    save_image_job(image_job)
+                    image_queue.put(image_job["id"])
+            except Exception:
+                continue
+        for path in sorted(WAN_JOBS_ROOT.glob("*/job.json")):
+            try:
+                wan_job = json.loads(path.read_text(encoding="utf-8"))
+                if wan_job.get("status") in {"queued", "running"}:
+                    wan_job.update(status="queued", stage="재시작 후 대기 중", updated_at=now_iso())
+                    save_wan_job(wan_job)
+                    wan_queue.put(wan_job["id"])
+            except Exception:
+                continue
 
 
 @app.on_event("startup")
@@ -555,7 +769,157 @@ def health() -> dict:
         "model": "LTX-2.5 Dev BF16",
         "queue_depth": job_queue.qsize(),
         "batch_mode": batch_status(),
+        "qwen_image_ready": QWEN_IMAGE_PYTHON.is_file() and (QWEN_IMAGE_ROOT / ".ready").is_file(),
     }
+
+
+@app.get("/image/health", dependencies=[Depends(require_token)])
+def image_health() -> dict:
+    return {
+        "ok": QWEN_IMAGE_PYTHON.is_file() and QWEN_IMAGE_RUNNER.is_file(),
+        "model_ready": (QWEN_IMAGE_ROOT / ".ready").is_file(),
+        "model": "Qwen-Image-Edit-2511",
+        "queue_depth": image_queue.qsize(),
+    }
+
+
+@app.post("/image/jobs", status_code=202, dependencies=[Depends(require_token)])
+async def create_image_job(
+    image_id: str = Form(...),
+    prompt: str = Form(...),
+    aspect_ratio: Literal["16:9", "9:16"] = Form("9:16"),
+    seed: int = Form(42),
+    reference_images: list[UploadFile] = File(...),
+) -> dict:
+    if not JOB_ID_PATTERN.fullmatch(image_id):
+        raise HTTPException(status_code=400, detail="Invalid image id")
+    if not 10 <= len(prompt.strip()) <= 20_000 or not 1 <= len(reference_images) <= 6:
+        raise HTTPException(status_code=400, detail="Invalid Qwen Image request")
+    if image_metadata_path(image_id).is_file():
+        return load_image_job(image_id)
+    directory = image_job_dir(image_id)
+    directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+    filenames: list[str] = []
+    try:
+        for index, upload in enumerate(reference_images):
+            content_type = (upload.content_type or "").lower()
+            extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}.get(content_type)
+            if not extension:
+                raise HTTPException(status_code=415, detail="Unsupported reference type")
+            destination = directory / f"reference-{index:02d}{extension}"
+            size = 0
+            with destination.open("wb") as output:
+                while chunk := await upload.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > MAX_IMAGE_BYTES:
+                        raise HTTPException(status_code=413, detail="Reference is too large")
+                    output.write(chunk)
+            if size == 0:
+                raise HTTPException(status_code=400, detail="Reference is empty")
+            destination.chmod(0o600)
+            filenames.append(destination.name)
+    except Exception:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+    timestamp = now_iso()
+    job = {"id": image_id, "status": "queued", "stage": "B200 이미지 대기열에 등록됨", "prompt": prompt.strip(), "aspect_ratio": aspect_ratio, "seed": seed, "reference_filenames": filenames, "model": "Qwen-Image-Edit-2511", "error": "", "created_at": timestamp, "updated_at": timestamp, "started_at": "", "completed_at": ""}
+    save_image_job(job)
+    image_queue.put(image_id)
+    return job
+
+
+@app.get("/image/jobs/{image_id}", dependencies=[Depends(require_token)])
+def get_image_job(image_id: str) -> dict:
+    if not JOB_ID_PATTERN.fullmatch(image_id):
+        raise HTTPException(status_code=400, detail="Invalid image id")
+    return load_image_job(image_id)
+
+
+@app.get("/image/jobs/{image_id}/image", dependencies=[Depends(require_token)])
+def get_image_output(image_id: str) -> FileResponse:
+    job = load_image_job(image_id)
+    output_path = image_job_dir(image_id) / "output.jpg"
+    if job.get("status") != "succeeded" or not output_path.is_file():
+        raise HTTPException(status_code=409, detail="Image is not ready")
+    return FileResponse(output_path, media_type="image/jpeg", filename=f"{image_id}.jpg")
+
+
+@app.get("/wan/health", dependencies=[Depends(require_token)])
+def wan_health() -> dict:
+    return {
+        "ok": WAN_PYTHON.is_file() and WAN_RUNNER.is_file(),
+        "model_ready": (WAN22_ROOT / ".ready").is_file(),
+        "model": "Wan 2.2 I2V-A14B",
+        "queue_depth": wan_queue.qsize(),
+    }
+
+
+@app.post("/wan/jobs", status_code=202, dependencies=[Depends(require_token)])
+async def create_wan_job(
+    job_id: str = Form(...),
+    prompt: str = Form(...),
+    aspect_ratio: Literal["16:9", "9:16"] = Form("9:16"),
+    duration_seconds: int = Form(5),
+    seed: int = Form(42),
+    image: UploadFile = File(...),
+) -> dict:
+    if not JOB_ID_PATTERN.fullmatch(job_id) or not 10 <= len(prompt.strip()) <= 20_000:
+        raise HTTPException(status_code=400, detail="Invalid Wan request")
+    if duration_seconds not in {5, 10}:
+        raise HTTPException(status_code=400, detail="Invalid Wan duration")
+    if wan_metadata_path(job_id).is_file():
+        return load_wan_job(job_id)
+    content_type = (image.content_type or "").lower()
+    extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}.get(content_type)
+    if not extension:
+        raise HTTPException(status_code=415, detail="Unsupported start image")
+    directory = wan_job_dir(job_id)
+    directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+    destination = directory / f"input{extension}"
+    size = 0
+    try:
+        with destination.open("wb") as output:
+            while chunk := await image.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_IMAGE_BYTES:
+                    raise HTTPException(status_code=413, detail="Start image is too large")
+                output.write(chunk)
+        if size == 0:
+            raise HTTPException(status_code=400, detail="Start image is empty")
+        destination.chmod(0o600)
+    except Exception:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+    timestamp = now_iso()
+    estimated_seconds = 1_800 if duration_seconds == 5 else 2_700
+    job = {"id": job_id, "status": "queued", "stage": "Wan 대기열에 등록됨", "prompt": prompt.strip(), "aspect_ratio": aspect_ratio, "duration_seconds": duration_seconds, "seed": seed, "input_filename": destination.name, "model": "Wan 2.2 I2V-A14B", "error": "", "created_at": timestamp, "updated_at": timestamp, "started_at": "", "completed_at": "", "estimated_seconds_remaining": estimated_seconds, "queue_position": wan_queue.qsize()}
+    save_wan_job(job)
+    wan_queue.put(job_id)
+    return job
+
+
+@app.get("/wan/jobs/{job_id}", dependencies=[Depends(require_token)])
+def get_wan_job(job_id: str) -> dict:
+    if not JOB_ID_PATTERN.fullmatch(job_id):
+        raise HTTPException(status_code=400, detail="Invalid Wan job id")
+    job = load_wan_job(job_id)
+    if job.get("status") == "running":
+        elapsed = max(0, round(time.time() - parse_timestamp(job.get("started_at", ""))))
+        estimated_seconds = 1_800 if job.get("duration_seconds") == 5 else 2_700
+        job["estimated_seconds_remaining"] = max(30, estimated_seconds - elapsed)
+    elif job.get("status") not in {"queued", "running"}:
+        job["estimated_seconds_remaining"] = 0
+        job["queue_position"] = 0
+    return job
+
+
+@app.get("/wan/jobs/{job_id}/video", dependencies=[Depends(require_token)])
+def get_wan_video(job_id: str) -> FileResponse:
+    job = load_wan_job(job_id)
+    output_path = wan_job_dir(job_id) / "output.mp4"
+    if job.get("status") != "succeeded" or not output_path.is_file():
+        raise HTTPException(status_code=409, detail="Wan video is not ready")
+    return FileResponse(output_path, media_type="video/mp4", filename=f"{job_id}.mp4")
 
 
 @app.post("/ltx/batch-mode", dependencies=[Depends(require_token)])
@@ -563,7 +927,7 @@ def set_batch_mode(payload: dict = Body(...)) -> dict:
     enabled = payload.get("enabled")
     if not isinstance(enabled, bool):
         raise HTTPException(status_code=400, detail="enabled must be a boolean")
-    if active_jobs():
+    if active_jobs() or active_image_jobs() or active_wan_jobs():
         raise HTTPException(status_code=409, detail="현재 영상 작업이 끝난 뒤 배치 모드를 전환해 주세요.")
     if enabled:
         with batch_lock:
@@ -573,7 +937,7 @@ def set_batch_mode(payload: dict = Body(...)) -> dict:
                 save_batch_state(state)
                 return batch_status()
             timestamp = now_iso()
-            state.update(enabled=True, state="starting", message="Qwen 235B를 멈추고 LTX 전용 GPU를 준비하고 있어요.", enabled_at=timestamp, last_job_at=timestamp, error="")
+            state.update(enabled=True, state="starting", message="Qwen 대기 모델을 멈추고 LTX 전용 GPU를 준비하고 있어요.", enabled_at=timestamp, last_job_at=timestamp, error="")
             save_batch_state(state)
             try:
                 stop_standby_service()
@@ -591,8 +955,8 @@ def set_batch_mode(payload: dict = Body(...)) -> dict:
                         subprocess.Popen([str(AX_SERVE_SCRIPT)], cwd=AX_ROOT, stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True)
                 raise HTTPException(status_code=500, detail=state["message"]) from error
         return batch_status()
-    threading.Thread(target=restore_standby_service, name="ltx25-qwen235-restore", daemon=True).start()
-    return {**batch_status(), "enabled": False, "state": "restoring", "message": "Qwen 235B 서비스를 복구하고 있어요."}
+    threading.Thread(target=restore_standby_service, name="ltx25-qwen-restore", daemon=True).start()
+    return {**batch_status(), "enabled": False, "state": "restoring", "message": "Qwen 대기 모델을 복구하고 있어요."}
 
 
 @app.post("/ltx/jobs", status_code=202, dependencies=[Depends(require_token)])

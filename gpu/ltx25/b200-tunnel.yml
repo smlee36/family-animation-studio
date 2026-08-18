@@ -6,5 +6,11 @@ ingress:
     path: ^/ltx/.*
     service: http://127.0.0.1:8787
   - hostname: b200-llm-node.technode.network
+    path: ^/image/.*
+    service: http://127.0.0.1:8787
+  - hostname: b200-llm-node.technode.network
+    path: ^/wan/.*
+    service: http://127.0.0.1:8787
+  - hostname: b200-llm-node.technode.network
     service: http://127.0.0.1:8000
   - service: http_status:404

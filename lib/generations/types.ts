@@ -1,6 +1,18 @@
 export type ShotGenerationStatus = "generating" | "ready" | "failed";
 export type VeoQualityTier = "fast" | "standard";
-export type VideoGenerationProvider = "google" | "ltx";
+export type ActualVideoGenerationProvider = "google" | "ltx" | "wan";
+export type VideoGenerationProvider = ActualVideoGenerationProvider | "auto";
+export type VideoRoutingMode = "manual" | "shadow" | "auto" | "qc_fallback";
+export type VideoRoutingDecision = {
+  mode: VideoRoutingMode;
+  requestedProvider: VideoGenerationProvider;
+  recommendedProvider: ActualVideoGenerationProvider;
+  selectedProvider: ActualVideoGenerationProvider;
+  reason: string;
+  difficultyScore: number;
+  requiresSplit: boolean;
+  fallbackChain: ActualVideoGenerationProvider[];
+};
 export type LtxPreset = "gentle" | "action" | "camera";
 export type LtxRenderMode = "preview" | "final";
 export type LtxSequenceMode = "timeline" | "montage";
@@ -38,7 +50,8 @@ export type ShotGenerationRecord = {
   shotId: string;
   operationName: string;
   model: string;
-  provider?: VideoGenerationProvider;
+  provider?: ActualVideoGenerationProvider;
+  routing?: VideoRoutingDecision;
   ltxPreset?: LtxPreset;
   ltxRenderMode?: LtxRenderMode;
   backendStatus?: string;
@@ -84,7 +97,8 @@ export type ShotGenerationView = Pick<
   approvalStatus: ShotApprovalStatus;
   qc: ShotQualityResult | null;
   aspectRatio: VideoAspectRatio;
-  provider: VideoGenerationProvider;
+  provider: ActualVideoGenerationProvider;
+  routing: VideoRoutingDecision | null;
   ltxPreset: LtxPreset;
   ltxRenderMode: LtxRenderMode;
   backendStatus: string;
@@ -101,7 +115,8 @@ export function generationView(record: ShotGenerationRecord): ShotGenerationView
     episodeId: record.episodeId || "",
     shotId: record.shotId,
     model: record.model,
-    provider: record.provider || (record.model.toLowerCase().includes("ltx") ? "ltx" : "google"),
+    provider: record.provider || (record.model.toLowerCase().includes("ltx") ? "ltx" : record.model.toLowerCase().includes("wan") ? "wan" : "google"),
+    routing: record.routing || null,
     ltxPreset: record.ltxPreset || "gentle",
     ltxRenderMode: record.ltxRenderMode || "final",
     backendStatus: record.backendStatus || "",
@@ -136,7 +151,8 @@ export function isShotGenerationRecord(value: unknown): value is ShotGenerationR
   return record.version === 1 && typeof record.id === "string" && typeof record.shotId === "string" &&
     (record.episodeId === undefined || typeof record.episodeId === "string") &&
     typeof record.operationName === "string" && typeof record.model === "string" && typeof record.prompt === "string" &&
-    (record.provider === undefined || record.provider === "google" || record.provider === "ltx") &&
+    (record.provider === undefined || record.provider === "google" || record.provider === "ltx" || record.provider === "wan") &&
+    (record.routing === undefined || isVideoRoutingDecision(record.routing)) &&
     (record.ltxPreset === undefined || record.ltxPreset === "gentle" || record.ltxPreset === "action" || record.ltxPreset === "camera") &&
     (record.ltxRenderMode === undefined || record.ltxRenderMode === "preview" || record.ltxRenderMode === "final") &&
     (record.backendStatus === undefined || typeof record.backendStatus === "string") &&
@@ -162,6 +178,18 @@ export function isShotGenerationRecord(value: unknown): value is ShotGenerationR
     (record.parentGenerationId === undefined || typeof record.parentGenerationId === "string") &&
     (record.approvalStatus === undefined || record.approvalStatus === "pending" || record.approvalStatus === "approved" || record.approvalStatus === "needs_review") &&
     (record.qc === undefined || record.qc === null || isShotQualityResult(record.qc));
+}
+
+function isVideoRoutingDecision(value: unknown): value is VideoRoutingDecision {
+  if (!value || typeof value !== "object") return false;
+  const routing = value as Partial<VideoRoutingDecision>;
+  const actualProviders = ["google", "ltx", "wan"];
+  return (routing.mode === "manual" || routing.mode === "shadow" || routing.mode === "auto" || routing.mode === "qc_fallback") &&
+    (routing.requestedProvider === "auto" || actualProviders.includes(routing.requestedProvider || "")) &&
+    actualProviders.includes(routing.recommendedProvider || "") && actualProviders.includes(routing.selectedProvider || "") &&
+    typeof routing.reason === "string" && typeof routing.difficultyScore === "number" && Number.isFinite(routing.difficultyScore) &&
+    routing.difficultyScore >= 0 && routing.difficultyScore <= 10 && typeof routing.requiresSplit === "boolean" &&
+    Array.isArray(routing.fallbackChain) && routing.fallbackChain.every((provider) => actualProviders.includes(provider));
 }
 
 function isScore(value: unknown) {

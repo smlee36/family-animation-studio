@@ -1,0 +1,6 @@
+diffusers @ git+https://github.com/huggingface/diffusers.git
+transformers>=4.51.3
+accelerate>=1.2
+safetensors>=0.5
+sentencepiece>=0.2
+pillow>=11

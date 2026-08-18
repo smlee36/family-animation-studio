@@ -16,6 +16,7 @@ import type {
   LtxSequenceMode,
   ShotGenerationRecord,
   VideoAspectRatio,
+  VideoRoutingDecision,
 } from "@/lib/generations/types";
 import type { ContinuityFrameInput } from "@/lib/generations/veo";
 
@@ -99,7 +100,7 @@ async function readPrivateBlob(pathname: string) {
   };
 }
 
-async function prepareStartFrame(input: {
+export async function prepareStartFrame(input: {
   id: string;
   prompt: string;
   referenceIds: string[];
@@ -184,6 +185,7 @@ export async function startLtxGeneration(input: {
   ltxPreset?: LtxPreset;
   ltxRenderMode?: LtxRenderMode;
   ltxSequenceMode?: LtxSequenceMode;
+  routing?: VideoRoutingDecision;
 }) {
   const aspectRatio = input.aspectRatio || "16:9";
   const durationSeconds = duration(input.estimatedSeconds);
@@ -196,6 +198,7 @@ export async function startLtxGeneration(input: {
     operationName: input.id,
     model: "LTX-2.5 Dev BF16",
     provider: "ltx",
+    routing: input.routing,
     ltxPreset: input.ltxPreset || "gentle",
     ltxRenderMode: input.ltxRenderMode || "preview",
     backendStatus: "시작 프레임 준비 중",
